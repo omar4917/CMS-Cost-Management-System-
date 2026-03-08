@@ -470,17 +470,31 @@ class InvestmentsView(ctk.CTkFrame):
             ctk.CTkLabel(form, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(
                 anchor="w", pady=(12, 4)
             )
-            entry = ctk.CTkEntry(
-                form,
-                height=40,
-                corner_radius=10,
-                fg_color="#1e293b",
-                border_color="#334155",
-            )
-            if default:
-                entry.insert(0, default)
-            entry.pack(fill="x")
-            entries[key] = entry
+            if key == "payment_method":
+                var = ctk.StringVar(value=default)
+                ctk.CTkOptionMenu(
+                    form,
+                    values=["bank_transfer", "cash", "cheque", "mobile_banking"],
+                    variable=var,
+                    fg_color="#1e293b",
+                    button_color="#334155",
+                    dropdown_fg_color="#111d39",
+                    height=40,
+                    corner_radius=10,
+                ).pack(fill="x")
+                entries[key] = var
+            else:
+                entry = ctk.CTkEntry(
+                    form,
+                    height=40,
+                    corner_radius=10,
+                    fg_color="#1e293b",
+                    border_color="#334155",
+                )
+                if default:
+                    entry.insert(0, default)
+                entry.pack(fill="x")
+                entries[key] = entry
 
         ctk.CTkLabel(form, text="Notes", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(
             anchor="w", pady=(12, 4)

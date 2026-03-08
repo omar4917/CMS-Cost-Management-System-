@@ -415,9 +415,23 @@ class ContractorsView(ctk.CTkFrame):
             entry.pack(fill="x")
             entries[key] = entry
 
+        def add_menu(label, key, values, default):
+            ctk.CTkLabel(form, text=label, text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+                anchor="w", pady=(10, 4)
+            )
+            current = str(contractor.get(key) or default) if contractor else str(default)
+            options = list(values)
+            if current and current not in options:
+                options = [current] + options
+            var = ctk.StringVar(value=current)
+            ctk.CTkOptionMenu(
+                form, values=options, variable=var, fg_color="#101b35", button_color="#233154", button_hover_color="#31446b", height=40, corner_radius=10
+            ).pack(fill="x")
+            entries[key] = var
+
         add_field("Name *", "name", "Prime Build Associates")
         add_field("Company", "company", "Vendor company")
-        add_field("Specialization", "specialization", "Structural, electrical, finishing...")
+        add_menu("Specialization", "specialization", ["Structural", "Electrical", "Mechanical", "Plumbing", "Interior Finishing", "Landscaping", "General Contractor"], "Structural")
         add_field("Phone", "phone", "01XXXXXXXXX")
         add_field("Email", "email", "contractor@example.com")
 
