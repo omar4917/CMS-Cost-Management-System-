@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "content": "add costs for projects!"
+  },
+  {
+    "role": "assistant",
+    "content": "No API key configured. Go to AI Settings to add your API key."
+  },
+  {
+    "role": "user",
+    "content": "add costs for projects!"
+  },
+  {
+    "role": "assistant",
+    "content": "```json\n{\"execute_action\": \"insert\", \"table\": \"cost_items\", \"data\": {\"name\": \"Land Acquisition\", \"project_id\": 1, \"category_id\": 1, \"description\": \"Purchase of land for Dhaka Residential Project\", \"quantity\": 1, \"unit\": \"plot\", \"unit_price\": 50000000.00, \"estimated_amount\": 50000000.00, \"actual_amount\": 0.00, \"currency\": \"BDT\", \"date\": \"2022-01-01\", \"vendor\": \"Land Owner\", \"invoice_no\": \"LO-001\", \"status\": \"pending\", \"notes\": \"Initial payment pending\", \"created_by\": 1}}\n```\n```json\n{\"execute_action\": \"insert\", \"table\": \"cost_items\", \"data\": {\"name\": \"Construction Materials\", \"project_id\": 1, \"category_id\": 2, \"description\": \"Purchase of construction materials for Dhaka Residential Project\", \"quantity\": 1000, \"unit\": \"ton\", \"unit_price\": 1000.00, \"estimated_amount\": 1000000.00, \"actual_amount\": 0.00, \"currency\": \"BDT\", \"date\": \"2022-02-01\", \"vendor\": \"Supplier Ltd\", \"invoice_no\": \"SL-001\", \"status\": \"pending\", \"notes\": \"Initial payment pending\", \"created_by\": 1}}\n```\n```json\n{\"execute_action\": \"insert\", \"table\": \"cost_items\", \"data\": {\"name\": \"Labor Costs\", \"project_id\": 1, \"category_id\": 3, \"description\": \"Labor costs for Dhaka Residential Project\", \"quantity\": 100, \"unit\": \"man-day\", \"unit_price\": 5000.00, \"estimated_amount\": 500000.00, \"actual_amount\": 0.00, \"currency\": \"BDT\", \"date\": \"2022-03-01\", \"vendor\": \"Labor Contractor\", \"invoice_no\": \"LC-001\", \"status\": \"pending\", \"notes\": \"Initial payment pending\", \"created_by\": 1}}\n```\n```json\n{\"execute_action\": \"insert\", \"table\": \"cost_items\", \"data\": {\"name\": \"Land Preparation\", \"project_id\": 2, \"category_id\": 1, \"description\": \"Land preparation costs for Chattogram Commercial Project\", \"quantity\": 1, \"unit\": \"plot\", \"unit_price\": 20000000.00, \"estimated_amount\": 20000000.00, \"actual_amount\": 0.00, \"currency\": \"BDT\", \"date\": \"2022-04-01\", \"vendor\": \"Land Developer\", \"invoice_no\": \"LD-001\", \"status\": \"pending\", \"notes\": \"Initial payment pending\", \"created_by\": 1}}\n```\n```json\n{\"execute_action\": \"insert\", \"table\": \"cost_items\", \"data\": {\"name\": \"Design and Planning\", \"project_id\": 2, \"category_id\": 2, \"description\": \"Design and planning costs for Chattogram Commercial Project\", \"quantity\": 1, \"unit\": \"project\", \"unit_price\": 5000000.00, \"estimated_amount\": 5000000.00, \"actual_amount\": 0.00, \"currency\": \"BDT\", \"date\": \"2022-05-01\", \"vendor\": \"Architect Firm\", \"invoice_no\": \"AF-001\", \"status\": \"pending\", \"notes\": \"Initial payment pending\", \"created_by\": 1}}\n```\n\n*(Automatically executed 5 database actions)*"
+  }
+]

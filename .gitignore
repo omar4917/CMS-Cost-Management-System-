@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Build artifacts
+CMS-APP-PORTABLE/dist/
+CMS-APP-PORTABLE/build/
+CMS-APP-PORTABLE/*.spec
+CMS-APP-PORTABLE/*.exe
+CMS-APP-PORTABLE/*.db
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Embedded repos
+CMS-APP/
