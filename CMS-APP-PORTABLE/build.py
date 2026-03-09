@@ -9,7 +9,7 @@ if __name__ == '__main__':
     
     PyInstaller.__main__.run([
         'app.py',
-        '--name=CMS',
+        '--name=Houzez_CMS',
         '--noconfirm',
         '--windowed',
         '--onefile',

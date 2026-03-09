@@ -3,9 +3,19 @@ Settings View for CMS Desktop App.
 Configure application settings and currency exchange rates.
 """
 
+import os
+import sys
 import customtkinter as ctk
 from tkinter import messagebox
+from dotenv import set_key
 from core.database import execute_query
+
+
+if getattr(sys, "frozen", False):
+    app_dir = os.path.dirname(sys.executable)
+else:
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(app_dir, ".env")
 
 
 class SettingsView(ctk.CTkFrame):
@@ -29,6 +39,7 @@ class SettingsView(ctk.CTkFrame):
         self.tab_view.add("Financial")
         self.tab_view.add("Currencies")
         self.tab_view.add("Email")
+        self.tab_view.add("Environment (.env)")
 
     def load_data(self):
         try:
@@ -89,6 +100,60 @@ class SettingsView(ctk.CTkFrame):
                 ctk.CTkButton(row, text="Save", width=50, height=28, corner_radius=6,
                              fg_color="#3b82f6", hover_color="#2563eb", font=ctk.CTkFont(size=11),
                              command=lambda cid=c['id']: self._save_rate(cid)).pack(side="left", padx=5)
+
+        # Environment tab
+        env_tab = self.tab_view.tab("Environment (.env)")
+        ctk.CTkLabel(env_tab, text="⚠️ Note: Any changes marked with an asterisk (*) require restarting the app to take effect.",
+                    font=ctk.CTkFont(size=12, weight="bold"), text_color="#facc15").pack(anchor="w", padx=20, pady=(10, 15))
+
+        env_vars = [
+            ("DB_TYPE *", "DB_TYPE", "mysql"),
+            ("DB_FILE *", "DB_FILE", "cms_local.db"),
+            ("DB_HOST *", "DB_HOST", "127.0.0.1"),
+            ("DB_USER *", "DB_USER", "root"),
+            ("DB_PASS *", "DB_PASS", ""),
+            ("DB_NAME *", "DB_NAME", "cms_db"),
+            ("DB_PORT *", "DB_PORT", "3306"),
+            ("AI_PROVIDER", "AI_PROVIDER", "groq"),
+            ("AI_API_KEY", "AI_API_KEY", ""),
+            ("GMAIL_USER", "GMAIL_USER", ""),
+            ("GMAIL_APP_PASS", "GMAIL_APP_PASS", ""),
+        ]
+
+        for label_text, key, default_val in env_vars:
+            val = os.getenv(key, default_val)
+            self._add_env_row(env_tab, label_text, key, val)
+
+    def _add_env_row(self, parent, label_text, key, value):
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", padx=20, pady=5)
+
+        ctk.CTkLabel(frame, text=label_text, font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color="#e2e8f0", width=180, anchor="w").pack(side="left")
+
+        entry = ctk.CTkEntry(frame, height=34, fg_color="#1e293b", border_color="#334155",
+                            corner_radius=8, width=350)
+        
+        if "API_KEY" in key or "PASS" in key:
+            entry.configure(show="*")
+            
+        entry.insert(0, value)
+        entry.pack(side="left", padx=10)
+
+        ctk.CTkButton(frame, text="Save", width=55, height=30, corner_radius=6,
+                     fg_color="#10b981", hover_color="#059669", font=ctk.CTkFont(size=11),
+                     command=lambda k=key, e=entry: self._save_env_setting(k, e)).pack(side="left")
+
+    def _save_env_setting(self, key, entry):
+        try:
+            val = entry.get().strip()
+            os.environ[key] = val
+            if not os.path.exists(env_path):
+                open(env_path, "a", encoding="utf-8").close()
+            set_key(env_path, key, val)
+            messagebox.showinfo("Saved", f"Environment variable {key} updated in .env!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save {key}: {str(e)}")
 
     def _add_setting_row(self, parent, key, value, description):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
