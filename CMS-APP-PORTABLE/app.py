@@ -53,7 +53,7 @@ NAV_SECTIONS = [
             ("investors", "IN", "Investors", "Profiles & exposure"),
             ("investments", "IV", "Investments", "Capital flows"),
             ("payments", "SC", "Schedules", "Installments & dues"),
-            ("transactions", "LG", "Ledger", "All money movement"),
+            ("transactions", "TR", "Transactions", "All money movement"),
             ("reports", "RP", "Reports", "Exports & PDFs"),
         ],
     ),
@@ -78,7 +78,7 @@ VIEW_META = {
     "investors": ("Investors", "Maintain investor profiles and commitments."),
     "investments": ("Investments", "Record investments, sales, buys, and operating cash flow."),
     "payments": ("Payment Schedules", "Watch due dates, collections, and reminders."),
-    "transactions": ("Ledger", "Review every financial movement in one flow."),
+    "transactions": ("Transactions", "Review every financial movement in one flow."),
     "reports": ("Reports", "Generate export-ready summaries and printouts."),
     "emails": ("Email", "Compose outreach and manage templates."),
     "ai": ("AI Assistant", "Operate the desktop app through guided prompts."),
@@ -269,17 +269,17 @@ class CMSApp(ctk.CTk):
     def _create_nav_button(self, key, code, label, summary):
         button = ctk.CTkButton(
             self.sidebar_scroll,
-            text=f"{code}  {label}\n{summary}",
+            text=f"{code}  {label}",
             fg_color="transparent",
             hover_color="#12203a",
-            corner_radius=16,
-            height=66,
+            corner_radius=12,
+            height=42,
             anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(size=14, weight="bold"),
             text_color="#c8d6f1",
             command=lambda nav_key=key: self.navigate(nav_key),
         )
-        button.pack(fill="x", padx=4, pady=4)
+        button.pack(fill="x", padx=4, pady=2)
         self.nav_buttons[key] = button
 
     def navigate(self, view_name):
