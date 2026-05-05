@@ -7,7 +7,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 from core.database import execute_query
 from core.recycle_bin import recycle_and_delete
-from core.desktop_utils import pick_column
+from core.desktop_utils import pick_column, format_date
 import smtplib
 from email.message import EmailMessage
 import os
@@ -366,7 +366,7 @@ class EmailsView(ctk.CTkFrame):
                 row.bind("<Enter>", lambda e, r=row: r.configure(fg_color="#1e293b"))
                 row.bind("<Leave>", lambda e, r=row: r.configure(fg_color="transparent"))
 
-                date_str = log['sent_at'].strftime('%Y-%m-%d %H:%M') if log['sent_at'] else 'Unknown'
+                date_str = format_date(log.get('sent_at'), fmt='%Y-%m-%d %H:%M', default='Unknown')
                 ctk.CTkLabel(row, text=date_str, font=ctk.CTkFont(size=11), text_color="#94a3b8", width=130, anchor="w").pack(side="left", padx=4, pady=6)
                 ctk.CTkLabel(row, text=log['to_email'][:30], font=ctk.CTkFont(size=11), text_color="#e2e8f0", width=200, anchor="w").pack(side="left", padx=4)
                 ctk.CTkLabel(row, text=log['subject'][:45], font=ctk.CTkFont(size=11), text_color="#94a3b8", width=300, anchor="w").pack(side="left", padx=4)

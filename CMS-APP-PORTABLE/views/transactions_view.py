@@ -13,10 +13,15 @@ from core.transaction_utils import editable_meta_for_row, transaction_code, tran
 
 
 class TransactionsView(ctk.CTkFrame):
+    ROWS_PER_PAGE = 100
+
     def __init__(self, parent, user):
         super().__init__(parent, fg_color="transparent")
         self.user = user
         self.rows = []
+        self._render_after_id = None
+        self._filtered_rows = []
+        self.current_page = 0
         self.contractor_payment_date_col = pick_column("contractor_payments", "date", "payment_date", fallback="date")
         try:
             ensure_cash_transactions_table()
@@ -125,14 +130,65 @@ class TransactionsView(ctk.CTkFrame):
         )
         self.table_frame.pack(fill="both", expand=True)
 
+        pager = ctk.CTkFrame(self, fg_color="transparent")
+        pager.pack(fill="x", pady=(8, 0), padx=8)
+
+        self.render_status = ctk.CTkLabel(
+            pager,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#8ea3c7",
+        )
+        self.render_status.pack(side="left")
+
+        pager_actions = ctk.CTkFrame(pager, fg_color="transparent")
+        pager_actions.pack(side="right")
+
+        self.prev_button = ctk.CTkButton(
+            pager_actions,
+            text="Previous",
+            width=90,
+            height=32,
+            corner_radius=10,
+            fg_color="#182748",
+            hover_color="#223660",
+            command=self.prev_page,
+        )
+        self.prev_button.pack(side="left")
+
+        self.page_label = ctk.CTkLabel(
+            pager_actions,
+            text="Page 1 / 1",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#d7e3ff",
+            width=100,
+        )
+        self.page_label.pack(side="left", padx=10)
+
+        self.next_button = ctk.CTkButton(
+            pager_actions,
+            text="Next",
+            width=90,
+            height=32,
+            corner_radius=10,
+            fg_color="#182748",
+            hover_color="#223660",
+            command=self.next_page,
+        )
+        self.next_button.pack(side="left")
+
     def load_transactions(self):
+        self._cancel_pending_render()
         for widget in self.table_frame.winfo_children():
             widget.destroy()
+        self.render_status.configure(text="Loading ledger...")
+        self.current_page = 0
 
         try:
             self.rows = self._fetch_rows()
         except Exception as exc:
             ctk.CTkLabel(self.table_frame, text=f"Error loading ledger: {exc}", text_color="#ef4444").pack(pady=24)
+            self.render_status.configure(text="")
             return
 
         type_values = ["All Types"] + sorted({row["kind"] for row in self.rows})
@@ -142,6 +198,7 @@ class TransactionsView(ctk.CTkFrame):
         self.render_rows()
 
     def render_rows(self):
+        self._cancel_pending_render()
         for widget in self.table_frame.winfo_children():
             widget.destroy()
 
@@ -158,6 +215,7 @@ class TransactionsView(ctk.CTkFrame):
             rows = [row for row in rows if row.get("kind") == selected_type]
 
         rows.sort(key=lambda row: parse_date(row.get("tx_date")) or datetime.min, reverse=True)
+        self._filtered_rows = rows
 
         total_in = sum(as_float(row.get("amount")) for row in rows if row.get("direction") == "inflow")
         total_out = sum(as_float(row.get("amount")) for row in rows if row.get("direction") == "outflow")
@@ -178,9 +236,35 @@ class TransactionsView(ctk.CTkFrame):
                 font=ctk.CTkFont(size=12),
                 text_color="#6e84ac",
             ).pack(pady=(6, 0))
+            self.render_status.configure(text="0 rows")
+            self.page_label.configure(text="Page 0 / 0")
+            self.prev_button.configure(state="disabled")
+            self.next_button.configure(state="disabled")
             return
 
-        for row in rows:
+        total_pages = max((len(rows) - 1) // self.ROWS_PER_PAGE + 1, 1)
+        if self.current_page >= total_pages:
+            self.current_page = total_pages - 1
+        if self.current_page < 0:
+            self.current_page = 0
+
+        self._update_pager(total_pages, len(rows))
+        self._render_current_page()
+
+    def _render_current_page(self):
+        if not self.winfo_exists():
+            return
+
+        rows = self._filtered_rows
+        start_index = self.current_page * self.ROWS_PER_PAGE
+        end_index = min(start_index + self.ROWS_PER_PAGE, len(rows))
+        page_rows = rows[start_index:end_index]
+
+        self.render_status.configure(
+            text=f"Showing rows {start_index + 1}-{end_index} of {len(rows)}"
+        )
+
+        for row in page_rows:
             card = ctk.CTkFrame(
                 self.table_frame,
                 fg_color="#111d39",
@@ -241,6 +325,26 @@ class TransactionsView(ctk.CTkFrame):
                 ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
 
             self._bind_click(card, lambda _event, item=row: self.open_transaction_detail(item))
+
+    def _update_pager(self, total_pages, total_rows):
+        current = self.current_page + 1 if total_rows else 0
+        self.page_label.configure(text=f"Page {current} / {total_pages}")
+        self.prev_button.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.next_button.configure(state="normal" if self.current_page < total_pages - 1 else "disabled")
+
+    def prev_page(self):
+        if self.current_page <= 0:
+            return
+        self.current_page -= 1
+        self.render_rows()
+
+    def next_page(self):
+        total_rows = len(self._filtered_rows)
+        total_pages = max((total_rows - 1) // self.ROWS_PER_PAGE + 1, 1) if total_rows else 0
+        if self.current_page >= total_pages - 1:
+            return
+        self.current_page += 1
+        self.render_rows()
 
     def _fetch_rows(self):
         rows = []
@@ -584,6 +688,18 @@ class TransactionsView(ctk.CTkFrame):
         widget.bind("<Button-1>", callback)
         for child in widget.winfo_children():
             self._bind_click(child, callback)
+
+    def _cancel_pending_render(self):
+        if self._render_after_id is not None:
+            try:
+                self.after_cancel(self._render_after_id)
+            except Exception:
+                pass
+            self._render_after_id = None
+
+    def destroy(self):
+        self._cancel_pending_render()
+        super().destroy()
 
     def _entry_kind(self, entry_type):
         return {

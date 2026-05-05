@@ -5,6 +5,7 @@ Displays a log of user activities, creations, updates, and deletions.
 
 import customtkinter as ctk
 from core.database import execute_query
+from core.desktop_utils import format_date
 
 
 class AuditView(ctk.CTkFrame):
@@ -78,7 +79,7 @@ class AuditView(ctk.CTkFrame):
                 row.bind("<Enter>", lambda e, r=row: r.configure(fg_color="#1e293b"))
                 row.bind("<Leave>", lambda e, r=row: r.configure(fg_color="transparent"))
 
-                date_str = log['created_at'].strftime('%Y-%m-%d %H:%M:%S') if log.get('created_at') else 'N/A'
+                date_str = format_date(log.get('created_at'), fmt='%Y-%m-%d %H:%M:%S', default='N/A')
                 ctk.CTkLabel(row, text=date_str, font=ctk.CTkFont(size=11),
                             text_color="#94a3b8", width=140, anchor="w").pack(side="left", padx=4, pady=6)
 

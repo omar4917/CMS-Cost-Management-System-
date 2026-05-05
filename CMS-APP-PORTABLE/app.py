@@ -112,7 +112,6 @@ class CMSApp(ctk.CTk):
     def on_login(self, user):
         self.current_user = user
         self.login_frame.destroy()
-        self._bootstrap_demo_workspace()
         self.build_main_layout()
         self.navigate("dashboard")
 
@@ -381,14 +380,6 @@ class CMSApp(ctk.CTk):
         if hasattr(self, "main_frame"):
             self.main_frame.destroy()
         self.show_login()
-
-    def _bootstrap_demo_workspace(self):
-        try:
-            from core.demo_data import seed_connected_demo_data_if_empty
-
-            seed_connected_demo_data_if_empty(user_id=self.current_user.get("id"))
-        except Exception as exc:
-            print(f"Auto demo seed skipped: {exc}")
 
     def _clear_content(self):
         for widget in self.winfo_children():

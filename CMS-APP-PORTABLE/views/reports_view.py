@@ -7,6 +7,7 @@ import os
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 from core.database import execute_query
+from core.desktop_utils import format_date
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -100,7 +101,7 @@ class ReportsView(ctk.CTkFrame):
             for c in costs:
                 amt = float(c['actual_amount'] or 0)
                 total += amt
-                data.append([c['date'].strftime('%Y-%m-%d') if c['date'] else 'N/A', c['cat_name'] or '-', c['name'], f"{amt:,.0f}"])
+                data.append([format_date(c['date'], default='N/A'), c['cat_name'] or '-', c['name'], f"{amt:,.0f}"])
             
             data.append(["", "", "Total Spent", f"৳ {total:,.0f}"])
             
@@ -152,7 +153,7 @@ class ReportsView(ctk.CTkFrame):
             for r in inv_recs:
                 amt = float(r['amount'] or 0)
                 total += amt
-                data.append([r['date'].strftime('%Y-%m-%d') if r['date'] else 'N/A', (r['payment_method'] or 'Cash').upper(), f"{amt:,.0f}"])
+                data.append([format_date(r['date'], default='N/A'), (r['payment_method'] or 'Cash').upper(), f"{amt:,.0f}"])
             
             data.append(["", "Total Investment", f"৳ {total:,.0f}"])
             

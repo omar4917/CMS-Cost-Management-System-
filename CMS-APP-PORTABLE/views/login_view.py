@@ -208,8 +208,13 @@ class LoginView(ctk.CTkFrame):
         except Exception as exc:
             self.error_label.configure(text=f"Connection error: {str(exc)[:90]}")
         finally:
-            if self.winfo_exists():
-                self.login_btn.configure(state="normal", text="Enter Workspace")
+            try:
+                if self.winfo_exists():
+                    self.login_btn.configure(state="normal", text="Enter Workspace")
+            except Exception:
+                # The login frame is destroyed on successful login, so ignore
+                # any late widget teardown errors from CustomTkinter.
+                pass
 
     def toggle_password(self):
         self.show_password = not self.show_password

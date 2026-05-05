@@ -5,6 +5,7 @@ Premium design with stat cards, project progress, and activity feed.
 
 import customtkinter as ctk
 from core.database import execute_query
+from core.desktop_utils import format_date
 
 
 class DashboardView(ctk.CTkFrame):
@@ -192,7 +193,7 @@ class DashboardView(ctk.CTkFrame):
                     desc = (act.get('description', '') or '')[:50]
                     ctk.CTkLabel(row, text=desc, font=ctk.CTkFont(size=12),
                                 text_color="#cbd5e1", anchor="w").pack(side="left", padx=6, fill="x", expand=True)
-                    time_str = act['created_at'].strftime("%H:%M") if act.get('created_at') else ''
+                    time_str = format_date(act.get('created_at'), fmt="%H:%M", default="")
                     ctk.CTkLabel(row, text=time_str, font=ctk.CTkFont(size=11),
                                 text_color="#475569", width=50).pack(side="right", padx=10)
             else:
