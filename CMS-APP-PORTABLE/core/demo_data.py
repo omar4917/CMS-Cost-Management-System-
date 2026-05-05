@@ -3,10 +3,12 @@ Connected demo data seeding for the desktop app.
 Creates realistic, linked records across the main desktop modules.
 """
 
+import os
+import sys
 from datetime import date, timedelta
 
-from core.database import ensure_cash_transactions_table, ensure_project_profile_columns, execute_query
-from core.schema_sqlite import COST_CATEGORIES, INVESTOR_TYPES
+from core.database import ensure_cash_transactions_table, ensure_project_profile_columns, execute_query, get_table_columns
+from core.schema_mysql import COST_CATEGORIES, INVESTOR_TYPES
 
 
 EMAIL_TEMPLATES = [
@@ -116,6 +118,95 @@ def seed_connected_demo_data_if_empty(user_id=None):
     return seed_connected_demo_data(user_id=user_id)
 
 
+def _app_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _ensure_demo_project_covers(project_titles: list[str]) -> list[str | None]:
+    """Create deterministic local cover images for demo projects.
+
+    Returns DB-ready relative paths (forward slashes) under the app directory.
+    """
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    except Exception:
+        return [None for _ in project_titles]
+
+    base_dir = _app_dir()
+    out_dir = os.path.join(base_dir, "data", "demo_images")
+    os.makedirs(out_dir, exist_ok=True)
+
+    palette = [
+        ((9, 28, 65), (79, 140, 255)),
+        ((17, 24, 39), (16, 185, 129)),
+        ((15, 23, 42), (245, 158, 11)),
+        ((12, 18, 34), (236, 72, 153)),
+        ((7, 17, 31), (99, 102, 241)),
+        ((9, 14, 27), (34, 211, 238)),
+    ]
+
+    def _pick_fonts():
+        try:
+            return ImageFont.truetype("arial.ttf", 58), ImageFont.truetype("arial.ttf", 28)
+        except Exception:
+            default = ImageFont.load_default()
+            return default, default
+
+    font_title, font_sub = _pick_fonts()
+    created_paths: list[str | None] = []
+
+    width, height = 1400, 760
+    for idx, title in enumerate(project_titles, start=1):
+        filename = f"demo_project_cover_{idx:02d}.png"
+        abs_path = os.path.join(out_dir, filename)
+        rel_path = os.path.relpath(abs_path, base_dir).replace("\\", "/")
+
+        if not os.path.exists(abs_path):
+            start, end = palette[(idx - 1) % len(palette)]
+            img = Image.new("RGBA", (width, height), (0, 0, 0, 255))
+            draw = ImageDraw.Draw(img)
+
+            for y in range(height):
+                t = y / max(height - 1, 1)
+                r = int(start[0] + (end[0] - start[0]) * t)
+                g = int(start[1] + (end[1] - start[1]) * t)
+                b = int(start[2] + (end[2] - start[2]) * t)
+                draw.line([(0, y), (width, y)], fill=(r, g, b, 255))
+
+            # Ambient geometry
+            draw.ellipse([width - 430, -90, width + 120, 460], fill=(255, 255, 255, 18))
+            draw.ellipse([width - 700, height - 480, width - 240, height - 20], fill=(0, 0, 0, 35))
+            draw.rounded_rectangle([44, 44, 260, 120], radius=22, fill=(255, 255, 255, 20))
+            draw.text((70, 70), "HOUZEZ DEMO", font=font_sub, fill=(255, 255, 255, 210))
+
+            # Title block
+            draw.rounded_rectangle([60, height - 220, width - 60, height - 60], radius=28, fill=(0, 0, 0, 90))
+            draw.text((96, height - 198), title, font=font_title, fill=(248, 250, 252, 245))
+            draw.text(
+                (96, height - 118),
+                "Sample cover image generated locally for the desktop demo workspace.",
+                font=font_sub,
+                fill=(203, 213, 225, 220),
+            )
+
+            try:
+                img.save(abs_path, format="PNG", optimize=True)
+            except Exception:
+                try:
+                    img.convert("RGB").save(abs_path, format="PNG")
+                except Exception:
+                    # If saving fails (permissions), just skip the cover.
+                    created_paths.append(None)
+                    continue
+
+        created_paths.append(rel_path)
+
+    return created_paths
+
+
 def _ensure_investor_types():
     rows = execute_query("SELECT id, name FROM investor_types ORDER BY id ASC")
     if rows:
@@ -151,13 +242,37 @@ def _ensure_email_templates():
     except Exception:
         return
 
+    columns = get_table_columns("email_templates")
+    body_col = next((col for col in ("body", "body_html", "bodyHtml") if col in columns), None)
+    if not body_col:
+        return
+
     existing_names = {str(row.get("name") or "").strip() for row in existing_rows}
     for name, subject, body, is_system in EMAIL_TEMPLATES:
         if name in existing_names:
             continue
+        payload = {
+            "name": name,
+            "subject": subject,
+            body_col: body,
+        }
+        if "is_system" in columns:
+            payload["is_system"] = is_system
+        if "isSystem" in columns:
+            payload["isSystem"] = is_system
+        if "is_active" in columns:
+            payload["is_active"] = 1
+        if "isActive" in columns:
+            payload["isActive"] = 1
+        if "trigger_type" in columns:
+            payload["trigger_type"] = "payment_overdue" if "Overdue" in name else "manual"
+        if "triggerType" in columns:
+            payload["triggerType"] = "payment_overdue" if "Overdue" in name else "manual"
+
+        cols = list(payload.keys())
         execute_query(
-            "INSERT INTO email_templates (name, subject, body, is_system, created_at, updated_at) VALUES (%s, %s, %s, %s, NOW(), NOW())",
-            (name, subject, body, is_system),
+            f"INSERT INTO email_templates ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
+            tuple(payload[col] for col in cols),
             fetch=False,
         )
 
@@ -256,12 +371,17 @@ def _insert_projects(today, batch_code, user_id):
         },
     ]
 
+    cover_paths = _ensure_demo_project_covers([spec.get("name") or f"Project {idx}" for idx, spec in enumerate(project_specs, start=1)])
+    for spec, cover_path in zip(project_specs, cover_paths):
+        if cover_path:
+            spec["cover_image_path"] = cover_path
+
     project_ids = []
     for spec in project_specs:
         project_ids.append(
             execute_query(
-                "INSERT INTO projects (name, description, location, type, property_type, property_for, status, construction_status, start_date, estimated_end_date, total_budget, progress, unit_size, transaction_type, floor_available_on, bedrooms, bathrooms, balconies, garages, total_floors, total_units, furnishing, facing, land_area, building_area, features, nearby_places, corporate_office, created_by, created_at, updated_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())",
+                "INSERT INTO projects (name, description, location, type, property_type, property_for, status, construction_status, start_date, estimated_end_date, total_budget, progress, unit_size, transaction_type, floor_available_on, bedrooms, bathrooms, balconies, garages, total_floors, total_units, furnishing, facing, land_area, building_area, features, nearby_places, corporate_office, cover_image_path, created_by, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())",
                 (
                     spec["name"],
                     spec["description"],
@@ -291,6 +411,7 @@ def _insert_projects(today, batch_code, user_id):
                     spec["features"],
                     spec["nearby_places"],
                     spec["corporate_office"],
+                    spec.get("cover_image_path"),
                     user_id,
                 ),
                 fetch=False,

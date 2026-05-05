@@ -101,7 +101,7 @@ def get_system_context():
                 )
 
         inv_total = execute_query("SELECT COALESCE(SUM(amount), 0) AS total FROM investments WHERE status='confirmed'")
-        cost_total = execute_query("SELECT COALESCE(SUM(actual_amount), 0) AS total FROM cost_items")
+        cost_total = execute_query("SELECT COALESCE(SUM(cost_amount), 0) AS total FROM cost_items")
         budget_total = execute_query("SELECT COALESCE(SUM(total_budget), 0) AS total FROM projects")
         overdue = execute_query(
             "SELECT COUNT(*) AS cnt FROM payment_schedules "
@@ -117,10 +117,10 @@ def get_system_context():
         context_parts.append(f"  Active Investors: {inv_count[0]['cnt']}")
 
         top_cats = execute_query(
-            "SELECT cc.name, COALESCE(SUM(ci.actual_amount), 0) AS total "
-            "FROM cost_items ci "
-            "JOIN cost_categories cc ON ci.category_id = cc.id "
-            "GROUP BY cc.name ORDER BY total DESC LIMIT 5"
+            "SELECT cost_head_materials AS name, COALESCE(SUM(cost_amount), 0) AS total "
+            "FROM cost_items "
+            "WHERE cost_head_materials IS NOT NULL AND cost_head_materials != '' "
+            "GROUP BY cost_head_materials ORDER BY total DESC LIMIT 5"
         )
         if top_cats:
             context_parts.append("\nTOP COST CATEGORIES:")

@@ -6,6 +6,8 @@ Supports Custom Templates, Dynamic Variables ({name}, {amount}), and Bulk Sendin
 import customtkinter as ctk
 from tkinter import messagebox
 from core.database import execute_query
+from core.recycle_bin import recycle_and_delete
+from core.desktop_utils import pick_column
 import smtplib
 from email.message import EmailMessage
 import os
@@ -17,6 +19,8 @@ class EmailsView(ctk.CTkFrame):
         self.user = user
         self.investors = []
         self.templates = []
+        self.template_body_col = pick_column("email_templates", "body", "body_html", "bodyHtml", fallback="body")
+        self.template_system_col = pick_column("email_templates", "is_system", "isSystem", fallback=None)
         
         self.build_ui()
         self.load_data()
@@ -63,7 +67,7 @@ class EmailsView(ctk.CTkFrame):
                 WHERE i.email IS NOT NULL AND i.email != ''
             """
             self.investors = execute_query(query)
-            self.templates = execute_query("SELECT * FROM email_templates ORDER BY name ASC")
+            self.templates = self._fetch_templates()
             
             self.refresh_compose_dropdowns()
             self.load_templates_list()
@@ -151,7 +155,7 @@ class EmailsView(ctk.CTkFrame):
             self.comp_sub.delete(0, 'end')
             self.comp_sub.insert(0, t['subject'])
             self.comp_body.delete("1.0", 'end')
-            self.comp_body.insert("1.0", t['body'])
+            self.comp_body.insert("1.0", t.get('body') or '')
 
     def send_bulk_emails(self):
         selected_ids = [k for k, v in self.recipient_vars.items() if v.get()]
@@ -237,7 +241,7 @@ class EmailsView(ctk.CTkFrame):
             w.destroy()
             
         try:
-            self.templates = execute_query("SELECT * FROM email_templates ORDER BY name ASC")
+            self.templates = self._fetch_templates()
             
             for t in self.templates:
                 card = ctk.CTkFrame(self.tm_list_frame, fg_color="#1e293b", corner_radius=8)
@@ -293,7 +297,7 @@ class EmailsView(ctk.CTkFrame):
         if t:
             n_ent.insert(0, t['name'])
             s_ent.insert(0, t['subject'])
-            b_txt.insert("1.0", t['body'])
+            b_txt.insert("1.0", t.get('body') or '')
             
             if t.get('is_system'):
                 n_ent.configure(state="disabled")
@@ -308,9 +312,9 @@ class EmailsView(ctk.CTkFrame):
                 
             try:
                 if t:
-                    execute_query("UPDATE email_templates SET name=%s, subject=%s, body=%s WHERE id=%s", (nm, sb, bd, t['id']), fetch=False)
+                    execute_query(f"UPDATE email_templates SET name=%s, subject=%s, {self.template_body_col}=%s WHERE id=%s", (nm, sb, bd, t['id']), fetch=False)
                 else:
-                    execute_query("INSERT INTO email_templates (name, subject, body) VALUES (%s, %s, %s)", (nm, sb, bd), fetch=False)
+                    execute_query(f"INSERT INTO email_templates (name, subject, {self.template_body_col}) VALUES (%s, %s, %s)", (nm, sb, bd), fetch=False)
                 d.destroy()
                 self.load_templates_list()
             except Exception as e:
@@ -320,8 +324,19 @@ class EmailsView(ctk.CTkFrame):
 
     def delete_template(self, t):
         if messagebox.askyesno("Confirm Delete", f"Delete template '{t['name']}'?"):
-            execute_query("DELETE FROM email_templates WHERE id=%s", (t['id'],), fetch=False)
+            recycle_and_delete(
+                "email_templates",
+                int(t["id"]),
+                deleted_by=self.user.get("id"),
+                reason="Deleted email template",
+            )
             self.load_templates_list()
+
+    def _fetch_templates(self):
+        system_select = f"{self.template_system_col} AS is_system" if self.template_system_col else "0 AS is_system"
+        return execute_query(
+            f"SELECT id, name, subject, {self.template_body_col} AS body, {system_select} FROM email_templates ORDER BY name ASC"
+        )
 
 
     # ================= LOGS TAB =================

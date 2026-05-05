@@ -5,8 +5,7 @@ Adds richer project listing fields and a property-style showcase dialog.
 
 import os
 import sys
-from datetime import datetime
-from tkinter import messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -16,6 +15,38 @@ except ImportError:
     Image = None
 
 from core.database import ensure_project_profile_columns, execute_query
+from core.projects_media import create_dummy_cover, pillow_available, resolve_image_path, store_project_image
+from core.projects_service import (
+    bulk_delete_projects,
+    delete_project as delete_project_service,
+    fetch_project,
+    fetch_projects,
+    project_metrics,
+    project_snapshot,
+)
+from views.projects_layout import ProjectsLayout
+from views.projects_shared import (
+    BALCONY_OPTIONS,
+    BATHROOM_OPTIONS,
+    BEDROOM_OPTIONS,
+    CONSTRUCTION_OPTIONS,
+    DETAIL_FIELDS,
+    FLOOR_RANGE_OPTIONS,
+    GARAGE_OPTIONS,
+    LISTING_OPTIONS,
+    STATUS_COLORS,
+    TOTAL_UNIT_OPTIONS,
+    TRANSACTION_OPTIONS,
+    TYPE_OPTIONS,
+    display,
+    format_currency,
+    format_date,
+    humanize,
+    safe_float,
+    safe_int,
+    split_items,
+    validate_date,
+)
 
 
 if getattr(sys, "frozen", False):
@@ -24,324 +55,217 @@ else:
     APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-STATUS_COLORS = {
-    "planning": "#4f8cff",
-    "active": "#27d3a2",
-    "paused": "#f6c85f",
-    "completed": "#9b8cff",
-    "cancelled": "#ff7a90",
-}
-
-TYPE_OPTIONS = ["residential", "commercial", "mixed", "industrial", "land_development", "renovation"]
-
-DETAIL_FIELDS = [
-    ("Property Type", "property_type"),
-    ("Property For", "property_for"),
-    ("Location", "location"),
-    ("Construction Status", "construction_status"),
-    ("Property Size", "unit_size"),
-    ("Transaction Type", "transaction_type"),
-    ("Floor Available On", "floor_available_on"),
-    ("Bedroom", "bedrooms"),
-    ("Baths", "bathrooms"),
-    ("Balconies", "balconies"),
-    ("Garages", "garages"),
-    ("Total Floor", "total_floors"),
-    ("Furnishing", "furnishing"),
-    ("Facing", "facing"),
-    ("Land Area", "land_area"),
-    ("Building Area", "building_area"),
-    ("Start Date", "start_date"),
-    ("Expected Completion", "estimated_end_date"),
-]
-
-
-def _safe_float(value):
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_int(value):
-    try:
-        return int(float(value or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _humanize(value):
-    text = str(value or "").replace("_", " ").strip()
-    return text.title() if text else ""
-
-
-def _display(value, fallback="Not added yet"):
-    text = str(value or "").strip()
-    return text if text else fallback
-
-
-def _format_currency(value):
-    return f"BDT {_safe_float(value):,.0f}"
-
-
-def _format_date(value):
-    if not value:
-        return "TBD"
-    if isinstance(value, datetime):
-        return value.strftime("%d %b %Y")
-    text = str(value).strip()
-    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(text, fmt).strftime("%d %b %Y")
-        except ValueError:
-            continue
-    return text or "TBD"
-
-
-def _split_items(value):
-    items = []
-    for line in str(value or "").replace("\r", "\n").split("\n"):
-        for part in line.split(","):
-            cleaned = part.strip().lstrip("-").lstrip("*").strip()
-            if cleaned:
-                items.append(cleaned)
-    return items
-
-
-def _validate_date(value, label):
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        datetime.strptime(text, "%Y-%m-%d")
-    except ValueError as exc:
-        raise ValueError(f"{label} must use YYYY-MM-DD.") from exc
-    return text
-
-
-def _resolve_image_path(value):
-    path = str(value or "").strip()
-    if not path:
-        return None
-    if os.path.isabs(path) and os.path.exists(path):
-        return path
-    local = os.path.join(APP_DIR, path)
-    if os.path.exists(local):
-        return local
-    return path if os.path.exists(path) else None
-
-
 class ProjectsView(ctk.CTkFrame):
     def __init__(self, parent, user):
         super().__init__(parent, fg_color="transparent")
         ensure_project_profile_columns()
         self.user = user
         self.projects = []
-        self.metric_labels = {}
-
-        self.scroll = ctk.CTkScrollableFrame(
-            self,
-            fg_color="transparent",
-            scrollbar_button_color="#1c2b48",
-            scrollbar_button_hover_color="#27406b",
-        )
-        self.scroll.pack(fill="both", expand=True)
+        self.layout = None
 
         self.build_ui()
         self.load_data()
 
     def build_ui(self):
-        hero = ctk.CTkFrame(self.scroll, fg_color="#0d1630", corner_radius=24, border_width=1, border_color="#233154")
-        hero.pack(fill="x", pady=(0, 14))
-
-        header = ctk.CTkFrame(hero, fg_color="transparent")
-        header.pack(fill="x", padx=24, pady=(20, 12))
-        col = ctk.CTkFrame(header, fg_color="transparent")
-        col.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(col, text="Project Showcase", font=ctk.CTkFont(size=28, weight="bold"), text_color="#f8fafc").pack(anchor="w")
-        ctk.CTkLabel(
-            col,
-            text="Open a project like a premium property profile with specs, features, and long-form description.",
-            font=ctk.CTkFont(size=13),
-            text_color="#8ea3c7",
-        ).pack(anchor="w", pady=(4, 0))
-        ctk.CTkButton(
-            header,
-            text="+ New Project",
-            fg_color="#4f8cff",
-            hover_color="#3578f6",
-            corner_radius=12,
-            height=42,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self.open_add_dialog,
-        ).pack(side="right")
-
-        filters = ctk.CTkFrame(hero, fg_color="transparent")
-        filters.pack(fill="x", padx=24, pady=(0, 18))
-        self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *_args: self.load_data())
-        ctk.CTkEntry(
-            filters,
-            textvariable=self.search_var,
-            placeholder_text="Search name, location, property type, listing purpose, or description...",
-            height=42,
-            width=390,
-            corner_radius=12,
-            fg_color="#101b35",
-            border_color="#233154",
-        ).pack(side="left")
-
-        self.status_var = ctk.StringVar(value="All Statuses")
-        ctk.CTkOptionMenu(
-            filters,
-            variable=self.status_var,
-            values=["All Statuses", "planning", "active", "paused", "completed", "cancelled"],
-            command=lambda _value: self.load_data(),
-            fg_color="#152140",
-            button_color="#233154",
-            button_hover_color="#31446b",
-            dropdown_fg_color="#111d39",
-            corner_radius=10,
-            height=42,
-            width=170,
-        ).pack(side="left", padx=(10, 0))
-
-        self.purpose_var = ctk.StringVar(value="All Listings")
-        ctk.CTkOptionMenu(
-            filters,
-            variable=self.purpose_var,
-            values=["All Listings", "Sale", "Rent", "Lease", "Joint Venture", "Other"],
-            command=lambda _value: self.load_data(),
-            fg_color="#152140",
-            button_color="#233154",
-            button_hover_color="#31446b",
-            dropdown_fg_color="#111d39",
-            corner_radius=10,
-            height=42,
-            width=170,
-        ).pack(side="left", padx=(10, 0))
-
-        metrics = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        metrics.pack(fill="x", pady=(0, 12))
-        for idx in range(4):
-            metrics.grid_columnconfigure(idx, weight=1)
-        for col_idx, key, label, color in [
-            (0, "projects", "Projects", "#4f8cff"),
-            (1, "active", "Active", "#27d3a2"),
-            (2, "budget", "Portfolio Budget", "#f6c85f"),
-            (3, "progress", "Avg Progress", "#9bb0d5"),
-        ]:
-            card = ctk.CTkFrame(metrics, fg_color="#111d39", corner_radius=16, border_width=1, border_color="#233154", height=88)
-            card.grid(row=0, column=col_idx, sticky="nsew", padx=5, pady=4)
-            card.pack_propagate(False)
-            ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=11), text_color="#7184aa").pack(anchor="w", padx=16, pady=(14, 0))
-            val = ctk.CTkLabel(card, text="-", font=ctk.CTkFont(size=22, weight="bold"), text_color=color)
-            val.pack(anchor="w", padx=16, pady=(5, 0))
-            self.metric_labels[key] = val
-
-        self.cards_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self.cards_frame.pack(fill="both", expand=True)
-        self.cards_frame.grid_columnconfigure(0, weight=1)
-        self.cards_frame.grid_columnconfigure(1, weight=1)
+        self.layout = ProjectsLayout(
+            self,
+            on_new=self.open_add_dialog,
+            on_auto_covers=self.generate_dummy_covers,
+            on_bulk_delete=self.open_bulk_delete,
+            on_filters_change=self.load_data,
+        )
 
     def load_data(self):
-        for widget in self.cards_frame.winfo_children():
-            widget.destroy()
-
-        query = "SELECT * FROM projects WHERE 1=1"
-        params = []
-        search = self.search_var.get().strip()
-        if search:
-            query += (
-                " AND (name LIKE %s OR location LIKE %s OR description LIKE %s "
-                "OR property_type LIKE %s OR property_for LIKE %s OR construction_status LIKE %s)"
-            )
-            like = f"%{search}%"
-            params.extend([like, like, like, like, like, like])
-        if self.status_var.get() != "All Statuses":
-            query += " AND status=%s"
-            params.append(self.status_var.get())
-        if self.purpose_var.get() != "All Listings":
-            query += " AND LOWER(COALESCE(property_for, ''))=%s"
-            params.append(self.purpose_var.get().lower())
-        query += " ORDER BY created_at DESC, id DESC"
-
+        self.layout.clear_cards()
         try:
-            self.projects = execute_query(query, params)
+            self.projects = fetch_projects(
+                search=self.layout.search_var.get().strip(),
+                status=self.layout.status_var.get(),
+                purpose=self.layout.purpose_var.get(),
+            )
         except Exception as exc:
-            ctk.CTkLabel(self.cards_frame, text=f"Error loading projects: {exc}", text_color="#ef4444").grid(row=0, column=0, padx=8, pady=20, sticky="w")
+            self.layout.show_error(f"Error loading projects: {exc}")
             return
-
-        total = len(self.projects)
-        self.metric_labels["projects"].configure(text=str(total))
-        self.metric_labels["active"].configure(text=str(sum(1 for p in self.projects if str(p.get("status", "")).lower() == "active")))
-        self.metric_labels["budget"].configure(text=_format_currency(sum(_safe_float(p.get("total_budget")) for p in self.projects)))
-        avg = sum(_safe_float(p.get("progress")) for p in self.projects) / total if total else 0
-        self.metric_labels["progress"].configure(text=f"{avg:.0f}%")
+        metrics = project_metrics(self.projects)
+        self.layout.set_metrics(metrics)
 
         if not self.projects:
-            empty = ctk.CTkFrame(self.cards_frame, fg_color="#0d1630", corner_radius=20, border_width=1, border_color="#1f2a45")
-            empty.grid(row=0, column=0, columnspan=2, sticky="ew", padx=6, pady=8)
-            ctk.CTkLabel(empty, text="No projects found", font=ctk.CTkFont(size=22, weight="bold"), text_color="#d8e4ff").pack(anchor="w", padx=22, pady=(22, 6))
-            ctk.CTkLabel(empty, text="Create a project and fill its listing details to unlock the desktop showcase view.", font=ctk.CTkFont(size=12), text_color="#6e84ac").pack(anchor="w", padx=22, pady=(0, 22))
+            self.layout.show_empty()
             return
 
-        for idx, project in enumerate(self.projects):
-            self._create_project_card(idx, project)
+        self.layout.render_projects(self.projects, self.open_project_detail, self.open_edit_dialog, self.delete_project)
 
-    def _create_project_card(self, idx, project):
-        card = ctk.CTkFrame(self.cards_frame, fg_color="#0d1630", corner_radius=22, border_width=1, border_color="#223356")
-        card.grid(row=idx // 2, column=idx % 2, sticky="nsew", padx=6, pady=6)
+    def generate_dummy_covers(self):
+        if not pillow_available():
+            messagebox.showwarning("Missing Dependency", "Pillow is required to generate demo cover images.")
+            return
 
-        content = ctk.CTkFrame(card, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=18, pady=(16, 8))
-        badges = ctk.CTkFrame(content, fg_color="transparent")
-        badges.pack(fill="x")
-        ctk.CTkLabel(badges, text=_display(project.get("property_for"), "Listing").upper(), font=ctk.CTkFont(size=10, weight="bold"), text_color="#08111f", fg_color="#f6c85f", corner_radius=8, padx=10, pady=4).pack(side="left")
-        status = str(project.get("status") or "planning").lower()
-        ctk.CTkLabel(badges, text=_humanize(status), font=ctk.CTkFont(size=10, weight="bold"), text_color="#f8fafc", fg_color=STATUS_COLORS.get(status, "#4b5563"), corner_radius=8, padx=10, pady=4).pack(side="right")
+        try:
+            projects = execute_query("SELECT id, name, location, property_type, cover_image_path FROM projects ORDER BY id ASC") or []
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+            return
 
-        ctk.CTkLabel(content, text=_display(project.get("name")), font=ctk.CTkFont(size=22, weight="bold"), text_color="#f8fafc", wraplength=500, justify="left").pack(anchor="w", pady=(14, 4))
-        ctk.CTkLabel(content, text=_display(project.get("location"), "Location pending"), font=ctk.CTkFont(size=12), text_color="#8ea3c7").pack(anchor="w")
+        created = 0
+        for project in projects:
+            # Skip if a valid cover is already present.
+            existing = resolve_image_path(project.get("cover_image_path"), APP_DIR)
+            if existing:
+                continue
 
-        specs = ctk.CTkFrame(content, fg_color="transparent")
-        specs.pack(fill="x", pady=(14, 10))
-        for label, value in [
-            ("Type", project.get("property_type") or _humanize(project.get("type")) or "Residential"),
-            ("Size", project.get("unit_size") or project.get("building_area") or "TBD"),
-            ("Bed", project.get("bedrooms") or "TBD"),
-            ("Floors", project.get("total_floors") or "TBD"),
-        ]:
-            pill = ctk.CTkFrame(specs, fg_color="#111d39", corner_radius=14, border_width=1, border_color="#233154", height=64)
-            pill.pack(side="left", fill="x", expand=True, padx=(0, 8))
-            pill.pack_propagate(False)
-            ctk.CTkLabel(pill, text=label, font=ctk.CTkFont(size=11), text_color="#7184aa").pack(anchor="w", padx=14, pady=(11, 0))
-            ctk.CTkLabel(pill, text=_display(value, "TBD"), font=ctk.CTkFont(size=13, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=14, pady=(4, 0))
+            rel_path = create_dummy_cover(project, APP_DIR)
+            if not rel_path:
+                continue
 
-        desc = str(project.get("description") or "").strip()
-        snippet = desc[:170] + ("..." if len(desc) > 170 else "")
-        ctk.CTkLabel(content, text=snippet or "Add a detailed description to make the project feel like a full property profile.", font=ctk.CTkFont(size=12), text_color="#c7d5f2", wraplength=540, justify="left").pack(anchor="w", pady=(4, 12))
+            try:
+                execute_query(
+                    "UPDATE projects SET cover_image_path=%s, updated_at=NOW() WHERE id=%s",
+                    (rel_path, int(project.get("id"))),
+                    fetch=False,
+                )
+                created += 1
+            except Exception:
+                pass
 
-        progress = max(0, min(_safe_float(project.get("progress")), 100))
-        row = ctk.CTkFrame(content, fg_color="transparent")
-        row.pack(fill="x")
-        ctk.CTkLabel(row, text="Construction Progress", font=ctk.CTkFont(size=11), text_color="#7184aa").pack(side="left")
-        ctk.CTkLabel(row, text=f"{progress:.0f}%", font=ctk.CTkFont(size=11, weight="bold"), text_color="#9bb0d5").pack(side="right")
-        bar = ctk.CTkProgressBar(content, height=8, corner_radius=6, fg_color="#13223f", progress_color="#4f8cff")
-        bar.set(progress / 100)
-        bar.pack(fill="x", pady=(6, 0))
-        self._bind_click(content, lambda _event, item=project: self.open_project_detail(item))
+        if created:
+            self.load_data()
+            messagebox.showinfo("Done", f"Generated {created} project cover images.")
+        else:
+            messagebox.showinfo("No Changes", "No missing covers found (or covers could not be created).")
 
-        footer = ctk.CTkFrame(card, fg_color="transparent")
-        footer.pack(fill="x", padx=18, pady=(0, 16))
-        ctk.CTkButton(footer, text="Open Showcase", height=34, corner_radius=10, fg_color="#4f8cff", hover_color="#3578f6", command=lambda item=project: self.open_project_detail(item)).pack(side="left")
-        ctk.CTkButton(footer, text="Edit", width=70, height=34, corner_radius=10, fg_color="#182748", hover_color="#223660", command=lambda item=project: self.open_edit_dialog(item)).pack(side="right")
-        ctk.CTkButton(footer, text="Delete", width=78, height=34, corner_radius=10, fg_color="#182748", hover_color="#7f1d1d", text_color="#ff9aa2", command=lambda pid=project["id"]: self.delete_project(pid)).pack(side="right", padx=(0, 8))
+    def open_bulk_delete(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Bulk Delete Projects")
+        dialog.geometry("980x680")
+        dialog.configure(fg_color="#0f172a")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
 
-    def _bind_click(self, widget, callback):
-        widget.bind("<Button-1>", callback)
-        for child in widget.winfo_children():
-            self._bind_click(child, callback)
+        ctk.CTkLabel(
+            dialog,
+            text="Bulk Delete Projects",
+            font=ctk.CTkFont(size=22, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(anchor="w", padx=24, pady=(22, 4))
+        ctk.CTkLabel(
+            dialog,
+            text="Select one or more projects to delete. Linked records will be moved to Recycle Bin first.",
+            font=ctk.CTkFont(size=12),
+            text_color="#94a3b8",
+        ).pack(anchor="w", padx=24, pady=(0, 12))
+
+        wrap = ctk.CTkFrame(dialog, fg_color="#111827", corner_radius=14, border_width=1, border_color="#223356")
+        wrap.pack(fill="both", expand=True, padx=20, pady=(0, 14))
+        wrap.grid_columnconfigure(0, weight=1)
+        wrap.grid_rowconfigure(0, weight=1)
+
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(
+            "Projects.Treeview",
+            background="#111827",
+            fieldbackground="#111827",
+            foreground="#e2e8f0",
+            rowheight=28,
+            borderwidth=0,
+            relief="flat",
+        )
+        style.map(
+            "Projects.Treeview",
+            background=[("selected", "#1e293b")],
+            foreground=[("selected", "#f8fafc")],
+        )
+        style.configure(
+            "Projects.Treeview.Heading",
+            background="#0f172a",
+            foreground="#94a3b8",
+            relief="flat",
+            font=("Segoe UI", 9, "bold"),
+        )
+
+        cols = ["id", "name", "location", "status", "budget"]
+        tree = ttk.Treeview(wrap, columns=cols, show="headings", style="Projects.Treeview", selectmode="extended")
+        headings = [
+            ("id", "ID", 70, "e"),
+            ("name", "PROJECT", 320, "w"),
+            ("location", "LOCATION", 220, "w"),
+            ("status", "STATUS", 120, "w"),
+            ("budget", "BUDGET", 140, "e"),
+        ]
+        for key, label, width, anchor in headings:
+            tree.heading(key, text=label, anchor=anchor)
+            tree.column(key, width=width, anchor=anchor, stretch=key in {"name", "location"})
+
+        v_scroll = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        h_scroll = ttk.Scrollbar(wrap, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=(10, 0))
+        v_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 10), pady=(10, 0))
+        h_scroll.grid(row=1, column=0, sticky="ew", padx=(10, 0), pady=(0, 10))
+
+        try:
+            rows = execute_query("SELECT id, name, location, status, total_budget FROM projects ORDER BY created_at DESC, id DESC") or []
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+            dialog.destroy()
+            return
+
+        for idx, row in enumerate(rows):
+            pid = int(row.get("id"))
+            values = [
+                pid,
+                row.get("name") or "",
+                row.get("location") or "",
+                humanize(row.get("status") or ""),
+                format_currency(row.get("total_budget")),
+            ]
+            tree.insert("", "end", iid=str(pid), values=values, tags=("even" if idx % 2 == 0 else "odd",))
+
+        def delete_selected():
+            selected = [int(i) for i in tree.selection() if str(i).isdigit()]
+            if not selected:
+                messagebox.showinfo("No Selection", "Select one or more projects first.")
+                return
+            if not messagebox.askyesno(
+                "Confirm Bulk Delete",
+                f"Delete {len(selected)} projects?\n\nThey and linked rows will be moved to Recycle Bin.",
+            ):
+                return
+            try:
+                bulk_delete_projects(selected, deleted_by=self.user.get("id"))
+            except Exception as exc:
+                messagebox.showerror("Error", str(exc))
+                return
+            dialog.destroy()
+            self.load_data()
+
+        footer = ctk.CTkFrame(dialog, fg_color="transparent")
+        footer.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(
+            footer,
+            text="Cancel",
+            fg_color="#182748",
+            hover_color="#223660",
+            corner_radius=10,
+            height=38,
+            command=dialog.destroy,
+        ).pack(side="left")
+        ctk.CTkButton(
+            footer,
+            text="Delete Selected",
+            fg_color="#ef4444",
+            hover_color="#dc2626",
+            corner_radius=10,
+            height=38,
+            command=delete_selected,
+        ).pack(side="right")
+
+    def _bulk_delete_projects(self, project_ids):
+        bulk_delete_projects(project_ids, deleted_by=self.user.get("id"))
 
     def open_add_dialog(self):
         self._open_dialog(None)
@@ -350,21 +274,21 @@ class ProjectsView(ctk.CTkFrame):
         self._open_dialog(project)
 
     def open_project_detail(self, project):
-        rows = execute_query("SELECT * FROM projects WHERE id=%s", (project["id"],))
-        if not rows:
+        project = fetch_project(project["id"])
+        if not project:
             messagebox.showwarning("Missing Project", "This project could not be loaded.")
             self.load_data()
             return
-        project = rows[0]
 
         try:
-            investments = execute_query("SELECT COALESCE(SUM(amount),0) AS total FROM investments WHERE project_id=%s AND status='confirmed'", (project["id"],))[0]["total"]
-            collections = execute_query("SELECT COALESCE(SUM(CASE WHEN paid_amount > 0 THEN paid_amount ELSE amount END),0) AS total FROM payment_schedules WHERE project_id=%s AND status='paid'", (project["id"],))[0]["total"]
-            costs = execute_query("SELECT COALESCE(SUM(actual_amount),0) AS total FROM cost_items WHERE project_id=%s AND status NOT IN ('cancelled','rejected')", (project["id"],))[0]["total"]
-            contractors = execute_query("SELECT COALESCE(SUM(amount),0) AS total FROM contractor_payments WHERE project_id=%s AND status IN ('paid','approved','completed')", (project["id"],))[0]["total"]
+            snapshot = project_snapshot(project["id"], project.get("name"))
+            investments = snapshot["investments"]
+            collections = snapshot["collections"]
+            costs = snapshot["costs"]
+            contractors = snapshot["contractors"]
         except Exception:
             investments = collections = costs = contractors = 0
-        net = _safe_float(investments) + _safe_float(collections) - _safe_float(costs) - _safe_float(contractors)
+        net = safe_float(investments) + safe_float(collections) - safe_float(costs) - safe_float(contractors)
 
         dialog = ctk.CTkToplevel(self)
         dialog.title(project.get("name") or "Project Detail")
@@ -383,12 +307,12 @@ class ProjectsView(ctk.CTkFrame):
         top.pack(fill="x", padx=24, pady=(22, 12))
         title = ctk.CTkFrame(top, fg_color="transparent")
         title.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(title, text=_display(project.get("name")), font=ctk.CTkFont(size=30, weight="bold"), text_color="#f8fafc").pack(anchor="w")
-        ctk.CTkLabel(title, text=_display(project.get("location"), "Location pending"), font=ctk.CTkFont(size=13), text_color="#8ea3c7").pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(title, text=display(project.get("name")), font=ctk.CTkFont(size=30, weight="bold"), text_color="#f8fafc").pack(anchor="w")
+        ctk.CTkLabel(title, text=display(project.get("location"), "Location pending"), font=ctk.CTkFont(size=13), text_color="#8ea3c7").pack(anchor="w", pady=(4, 0))
         badge_col = ctk.CTkFrame(top, fg_color="transparent")
         badge_col.pack(side="right")
-        ctk.CTkLabel(badge_col, text=_display(project.get("property_for"), "Listing").upper(), font=ctk.CTkFont(size=11, weight="bold"), text_color="#08111f", fg_color="#f6c85f", corner_radius=10, padx=12, pady=6).pack(anchor="e")
-        ctk.CTkLabel(badge_col, text=_humanize(project.get("status") or "planning"), font=ctk.CTkFont(size=11, weight="bold"), text_color="#f8fafc", fg_color=STATUS_COLORS.get(str(project.get("status") or "planning").lower(), "#4b5563"), corner_radius=10, padx=12, pady=6).pack(anchor="e", pady=(8, 0))
+        ctk.CTkLabel(badge_col, text=display(project.get("property_for"), "Listing").upper(), font=ctk.CTkFont(size=11, weight="bold"), text_color="#08111f", fg_color="#f6c85f", corner_radius=10, padx=12, pady=6).pack(anchor="e")
+        ctk.CTkLabel(badge_col, text=humanize(project.get("status") or "planning"), font=ctk.CTkFont(size=11, weight="bold"), text_color="#f8fafc", fg_color=STATUS_COLORS.get(str(project.get("status") or "planning").lower(), "#4b5563"), corner_radius=10, padx=12, pady=6).pack(anchor="e", pady=(8, 0))
 
         body = ctk.CTkFrame(hero, fg_color="transparent")
         body.pack(fill="x", padx=24, pady=(0, 24))
@@ -398,7 +322,7 @@ class ProjectsView(ctk.CTkFrame):
         visual.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         visual.pack_propagate(False)
 
-        image_path = _resolve_image_path(project.get("cover_image_path"))
+        image_path = resolve_image_path(project.get("cover_image_path"), APP_DIR)
         if image_path and Image is not None:
             try:
                 cover = ctk.CTkImage(Image.open(image_path), size=(700, 380))
@@ -406,24 +330,24 @@ class ProjectsView(ctk.CTkFrame):
                 ctk.CTkLabel(visual, text="", image=cover).pack(fill="both", expand=True, padx=10, pady=10)
             except Exception:
                 image_path = None
-        if not image_path:
+        if not image_path or Image is None:
             inner = ctk.CTkFrame(visual, fg_color="transparent")
             inner.pack(fill="both", expand=True, padx=24, pady=24)
             initials = "".join(part[:1] for part in str(project.get("name") or "P").split()[:2]).upper() or "P"
-            ctk.CTkLabel(inner, text=_display(project.get("property_type") or _humanize(project.get("type")), "Residential Tower").upper(), font=ctk.CTkFont(size=11, weight="bold"), text_color="#8ea3c7").pack(anchor="w")
+            ctk.CTkLabel(inner, text=display(project.get("property_type") or humanize(project.get("type")), "Residential Tower").upper(), font=ctk.CTkFont(size=11, weight="bold"), text_color="#8ea3c7").pack(anchor="w")
             badge = ctk.CTkFrame(inner, fg_color="#4f8cff", width=96, height=96, corner_radius=28)
             badge.pack(anchor="w", pady=(18, 16))
             badge.pack_propagate(False)
             ctk.CTkLabel(badge, text=initials, font=ctk.CTkFont(size=34, weight="bold"), text_color="#f8fafc").pack(expand=True)
-            ctk.CTkLabel(inner, text=_display(project.get("name")), font=ctk.CTkFont(size=30, weight="bold"), text_color="#f8fafc", wraplength=560, justify="left").pack(anchor="w")
-            ctk.CTkLabel(inner, text=_display(project.get("description"), "Add a cover image path to show a hero photo, or keep this rich placeholder layout for the desktop showcase."), font=ctk.CTkFont(size=13), text_color="#c7d5f2", wraplength=560, justify="left").pack(anchor="w", pady=(12, 0))
+            ctk.CTkLabel(inner, text=display(project.get("name")), font=ctk.CTkFont(size=30, weight="bold"), text_color="#f8fafc", wraplength=560, justify="left").pack(anchor="w")
+            ctk.CTkLabel(inner, text=display(project.get("description"), "Add a cover image path to show a hero photo, or keep this rich placeholder layout for the desktop showcase."), font=ctk.CTkFont(size=13), text_color="#c7d5f2", wraplength=560, justify="left").pack(anchor="w", pady=(12, 0))
 
         glance = ctk.CTkFrame(body, fg_color="#101b35", corner_radius=24, border_width=1, border_color="#233154")
         glance.grid(row=0, column=1, sticky="nsew")
         ctk.CTkLabel(glance, text="AT A GLANCE", font=ctk.CTkFont(size=22, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=22, pady=(18, 12))
         ctk.CTkFrame(glance, fg_color="#223356", height=1).pack(fill="x", padx=22)
         for label, key in DETAIL_FIELDS:
-            value = _format_date(project.get(key)) if key in {"start_date", "estimated_end_date"} else _display(project.get(key), "TBD")
+            value = format_date(project.get(key)) if key in {"start_date", "estimated_end_date"} else display(project.get(key), "TBD")
             row = ctk.CTkFrame(glance, fg_color="transparent")
             row.pack(fill="x", padx=22, pady=8)
             ctk.CTkLabel(row, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5", width=170, anchor="w").pack(side="left")
@@ -435,11 +359,11 @@ class ProjectsView(ctk.CTkFrame):
         for idx in range(5):
             summary.grid_columnconfigure(idx, weight=1)
         for col_idx, label, value, color in [
-            (0, "Location", _display(project.get("location"), "TBD"), "#9bb0d5"),
-            (1, "Apartment Size", _display(project.get("unit_size") or project.get("building_area"), "TBD"), "#f8fafc"),
-            (2, "Bedroom", _display(project.get("bedrooms"), "TBD"), "#f8fafc"),
-            (3, "Expected Completion", _format_date(project.get("estimated_end_date")), "#f8fafc"),
-            (4, "Status", _display(project.get("construction_status") or _humanize(project.get("status")), "TBD"), "#27d3a2"),
+            (0, "Location", display(project.get("location"), "TBD"), "#9bb0d5"),
+            (1, "Apartment Size", display(project.get("unit_size") or project.get("building_area"), "TBD"), "#f8fafc"),
+            (2, "Bedroom", display(project.get("bedrooms"), "TBD"), "#f8fafc"),
+            (3, "Expected Completion", format_date(project.get("estimated_end_date")), "#f8fafc"),
+            (4, "Status", display(project.get("construction_status") or humanize(project.get("status")), "TBD"), "#27d3a2"),
         ]:
             card = ctk.CTkFrame(summary, fg_color="#111d39", corner_radius=16, border_width=1, border_color="#233154", height=88)
             card.grid(row=0, column=col_idx, sticky="nsew", padx=5, pady=4)
@@ -465,7 +389,7 @@ class ProjectsView(ctk.CTkFrame):
             card.grid(row=0, column=col_idx, sticky="nsew", padx=4, pady=4)
             card.pack_propagate(False)
             ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=11), text_color="#7184aa").pack(anchor="w", padx=14, pady=(14, 0))
-            ctk.CTkLabel(card, text=_format_currency(value), font=ctk.CTkFont(size=16, weight="bold"), text_color=color).pack(anchor="w", padx=14, pady=(6, 0))
+            ctk.CTkLabel(card, text=format_currency(value), font=ctk.CTkFont(size=16, weight="bold"), text_color=color).pack(anchor="w", padx=14, pady=(6, 0))
 
         content = ctk.CTkFrame(scroll, fg_color="transparent")
         content.pack(fill="x", pady=(0, 14))
@@ -492,14 +416,14 @@ class ProjectsView(ctk.CTkFrame):
         ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=22, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=22, pady=(18, 12))
         box = ctk.CTkTextbox(card, fg_color="#111d39", border_color="#233154", border_width=1, corner_radius=16, wrap="word", font=ctk.CTkFont(size=13), text_color="#d9e6ff", height=height)
         box.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        box.insert("1.0", _display(text))
+        box.insert("1.0", display(text))
         box.configure(state="disabled")
 
     def _features_card(self, parent, column, value, pad):
         card = ctk.CTkFrame(parent, fg_color="#0d1630", corner_radius=22, border_width=1, border_color="#1f2a45")
         card.grid(row=0, column=column, sticky="nsew", padx=pad, pady=4)
         ctk.CTkLabel(card, text="Property Features", font=ctk.CTkFont(size=22, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=22, pady=(18, 12))
-        items = _split_items(value)
+        items = split_items(value)
         if not items:
             ctk.CTkLabel(card, text="No features added yet. Use the edit form to list amenities like lift, CCTV, generator, and fire protection.", font=ctk.CTkFont(size=13), text_color="#8ea3c7", wraplength=420, justify="left").pack(anchor="w", padx=22, pady=(0, 20))
             return
@@ -538,7 +462,8 @@ class ProjectsView(ctk.CTkFrame):
 
         def add_menu(label, key, values, default):
             ctk.CTkLabel(form, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(anchor="w", pady=(8, 4))
-            current = str(project.get(key) or default) if project else str(default)
+            current_value = project.get(key) if project and project.get(key) is not None else default
+            current = str(current_value)
             options = list(values)
             if current and current not in options:
                 options = [current] + options
@@ -553,29 +478,73 @@ class ProjectsView(ctk.CTkFrame):
             box.pack(fill="x")
             textareas[key] = box
 
+        def set_entry_value(key, value):
+            entry = entries[key]
+            if hasattr(entry, "delete"):
+                entry.delete(0, "end")
+                if value:
+                    entry.insert(0, value)
+
         add_entry("Project Name *", "name", placeholder="Pinaki North Ridge Heights")
         add_entry("Location", "location", placeholder="Uttara, Dhaka")
         add_menu("Property Type", "property_type", ["Apartment/Flats", "Independent House", "Duplex Home", "Studio Apartment", "Penthouse", "Residential Plot", "Commercial Office", "Shop/Retail", "Commercial Plot", "Agricultural Land", "Industrial Space"], "Apartment/Flats")
-        add_menu("Property For", "property_for", ["Sale", "Rent", "Joint Venture"], "Sale")
-        add_menu("Construction Status", "construction_status", ["Under Construction", "Ready to Move", "Almost Ready", "Newly Launched", "Upcoming"], "Under Construction")
+        add_menu("Property For", "property_for", LISTING_OPTIONS, "Sale")
+        add_menu("Construction Status", "construction_status", CONSTRUCTION_OPTIONS, "Under Construction")
         add_entry("Property Size", "unit_size", placeholder="1100 sqft")
-        add_menu("Transaction Type", "transaction_type", ["New", "Resale", "Developer Sale"], "New")
+        add_menu("Transaction Type", "transaction_type", TRANSACTION_OPTIONS, "New")
         add_menu("Floor Available On", "floor_available_on", ["Any Floor", "Ground Floor", "1st-5th Floor", "6th-10th Floor", "11th-15th Floor", "16th+ Floor", "Top Floor", "Basement"], "Any Floor")
-        add_entry("Bedrooms", "bedrooms", placeholder="03")
-        add_entry("Bathrooms", "bathrooms", placeholder="03")
-        add_entry("Balconies", "balconies", placeholder="2")
-        add_entry("Garages", "garages", placeholder="No Parking")
+        add_menu("Bedrooms", "bedrooms", BEDROOM_OPTIONS, "3")
+        add_menu("Bathrooms", "bathrooms", BATHROOM_OPTIONS, "3")
+        add_menu("Balconies", "balconies", BALCONY_OPTIONS, "2")
+        add_menu("Garages", "garages", GARAGE_OPTIONS, "No Parking")
         add_menu("Furnishing", "furnishing", ["Unfurnished", "Semi-furnished", "Fully Furnished"], "Unfurnished")
         add_menu("Facing", "facing", ["North Facing", "South Facing", "East Facing", "West Facing", "North-East Facing", "South-East Facing", "North-West Facing", "South-West Facing"], "North Facing")
         add_entry("Land Area", "land_area", placeholder="25 katha")
         add_entry("Building Area", "building_area", placeholder="120000 sqft")
-        add_entry("Total Floors", "total_floors", default="0")
-        add_entry("Total Units", "total_units", default="0")
+        add_menu("Total Floors", "total_floors", FLOOR_RANGE_OPTIONS, "0")
+        add_menu("Total Units", "total_units", TOTAL_UNIT_OPTIONS, "12")
         add_entry("Total Budget", "total_budget", default="0")
         add_entry("Progress (%)", "progress", default="0")
         add_entry("Start Date", "start_date", placeholder="YYYY-MM-DD")
         add_entry("Expected Completion", "estimated_end_date", placeholder="YYYY-MM-DD")
-        add_entry("Cover Image Path", "cover_image_path", placeholder="Optional local image path")
+
+        ctk.CTkLabel(form, text="Project Cover Image", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(anchor="w", pady=(8, 4))
+        image_row = ctk.CTkFrame(form, fg_color="transparent")
+        image_row.pack(fill="x")
+        cover_entry = ctk.CTkEntry(image_row, height=40, corner_radius=10, fg_color="#101b35", border_color="#233154", placeholder_text="Upload or paste a local image path")
+        cover_entry.insert(0, str(project.get("cover_image_path", "") or "") if project else "")
+        cover_entry.pack(side="left", fill="x", expand=True)
+        entries["cover_image_path"] = cover_entry
+
+        def refresh_preview():
+            preview_path = resolve_image_path(cover_entry.get().strip(), APP_DIR)
+            if preview_path:
+                image_hint.configure(text=f"Selected image: {os.path.basename(preview_path)}", text_color="#d8e4ff")
+            else:
+                image_hint.configure(text="Upload a JPG, PNG, WEBP, or GIF to show a project hero image.", text_color="#8ea3c7")
+
+        def choose_image():
+            source_path = filedialog.askopenfilename(
+                title="Select Project Image",
+                filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.webp;*.gif"), ("All files", "*.*")],
+            )
+            if not source_path:
+                return
+            try:
+                stored_path = store_project_image(source_path, APP_DIR)
+            except Exception as exc:
+                messagebox.showerror("Image Upload", str(exc))
+                return
+            set_entry_value("cover_image_path", stored_path)
+            refresh_preview()
+
+        ctk.CTkButton(image_row, text="Upload", width=92, height=40, corner_radius=10, fg_color="#4f8cff", hover_color="#3578f6", command=choose_image).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(image_row, text="Clear", width=74, height=40, corner_radius=10, fg_color="#182748", hover_color="#223660", command=lambda: [set_entry_value("cover_image_path", ""), refresh_preview()]).pack(side="left", padx=(8, 0))
+
+        image_hint = ctk.CTkLabel(form, text="", font=ctk.CTkFont(size=11), text_color="#8ea3c7")
+        image_hint.pack(anchor="w", pady=(6, 0))
+        refresh_preview()
+
         add_menu("Project Type", "type", TYPE_OPTIONS, "residential")
         add_menu("Workflow Status", "status", ["planning", "active", "paused", "completed", "cancelled"], "planning")
         add_textarea("Property Description", "description", 180)
@@ -610,12 +579,12 @@ class ProjectsView(ctk.CTkFrame):
                     "facing": get_value("facing") or None,
                     "land_area": get_value("land_area") or None,
                     "building_area": get_value("building_area") or None,
-                    "total_floors": _safe_int(get_value("total_floors")),
-                    "total_units": _safe_int(get_value("total_units")),
-                    "total_budget": _safe_float(get_value("total_budget")),
-                    "progress": _safe_float(get_value("progress")),
-                    "start_date": _validate_date(get_value("start_date"), "Start date"),
-                    "estimated_end_date": _validate_date(get_value("estimated_end_date"), "Expected completion"),
+                    "total_floors": safe_int(get_value("total_floors")),
+                    "total_units": safe_int(get_value("total_units")),
+                    "total_budget": safe_float(get_value("total_budget")),
+                    "progress": safe_float(get_value("progress")),
+                    "start_date": validate_date(get_value("start_date"), "Start date"),
+                    "estimated_end_date": validate_date(get_value("estimated_end_date"), "Expected completion"),
                     "cover_image_path": get_value("cover_image_path") or None,
                     "type": get_value("type") or "residential",
                     "status": get_value("status") or "planning",
@@ -651,10 +620,13 @@ class ProjectsView(ctk.CTkFrame):
         ctk.CTkButton(footer, text="Save Project", fg_color="#4f8cff", hover_color="#3578f6", corner_radius=10, height=38, command=save).pack(side="right")
 
     def delete_project(self, project_id):
-        if not messagebox.askyesno("Confirm Delete", "Delete this project? This cannot be undone."):
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            "Delete this project and related records?\n\nThe project and linked data will be moved to Recycle Bin.",
+        ):
             return
         try:
-            execute_query("DELETE FROM projects WHERE id=%s", (project_id,), fetch=False)
+            delete_project_service(int(project_id), deleted_by=self.user.get("id"))
             self.load_data()
         except Exception as exc:
             messagebox.showerror("Error", str(exc))

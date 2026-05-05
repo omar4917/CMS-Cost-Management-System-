@@ -13,6 +13,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from core.database import execute_query
+from core.recycle_bin import recycle_and_delete
 from core.desktop_utils import as_float, format_date, is_past_date, pick_column
 
 
@@ -20,7 +21,7 @@ class PaymentSchedulesView(ctk.CTkFrame):
     def __init__(self, parent, user):
         super().__init__(parent, fg_color="transparent")
         self.user = user
-        self.template_body_col = pick_column("email_templates", "body", "body_html", fallback="body")
+        self.template_body_col = pick_column("email_templates", "body", "body_html", "bodyHtml", fallback="body")
         self.build_ui()
         self.load_data()
 
@@ -102,7 +103,7 @@ class PaymentSchedulesView(ctk.CTkFrame):
             )
             value_label = ctk.CTkLabel(
                 card,
-                text="—",
+                text="-",
                 font=ctk.CTkFont(size=20, weight="bold"),
                 text_color=color,
             )
@@ -150,7 +151,13 @@ class PaymentSchedulesView(ctk.CTkFrame):
             for row in payments
             if row.get("status") == "overdue" or (row.get("status") == "pending" and is_past_date(row.get("due_date")))
         ]
-        paid_total = sum(as_float(row.get("amount")) for row in payments if row.get("status") == "paid")
+        paid_total = 0.0
+        for row in payments:
+            status = row.get("status")
+            if status == "paid":
+                paid_total += as_float(row.get("paid_amount") or row.get("amount"))
+            elif status == "partial":
+                paid_total += as_float(row.get("paid_amount"))
         scheduled_total = sum(as_float(row.get("amount")) for row in payments)
 
         self.metric_labels["scheduled"].configure(text=f"BDT {scheduled_total:,.0f}")
@@ -185,7 +192,7 @@ class PaymentSchedulesView(ctk.CTkFrame):
             top = ctk.CTkFrame(card, fg_color="transparent")
             top.pack(fill="x", padx=16, pady=(14, 8))
 
-            identity = f"{payment.get('investor_name') or 'Unknown investor'}  ·  {payment.get('project_name') or 'No project'}"
+            identity = f"{payment.get('investor_name') or 'Unknown investor'} | {payment.get('project_name') or 'No project'}"
             ctk.CTkLabel(
                 top,
                 text=identity,
@@ -252,6 +259,8 @@ class PaymentSchedulesView(ctk.CTkFrame):
                 text_color="#ff7a90",
                 command=lambda payment_id=payment["id"]: self.delete_payment(payment_id),
             ).pack(side="right")
+
+            self._bind_click(card, lambda _event, item=payment: self.open_payment_detail(item))
 
     def send_reminder(self, payment):
         def _send():
@@ -387,6 +396,36 @@ class PaymentSchedulesView(ctk.CTkFrame):
             else:
                 project_var = variable
 
+        ctk.CTkLabel(form, text="Installment No", text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", pady=(10, 4)
+        )
+        installment_var = ctk.StringVar(value="1")
+        ctk.CTkOptionMenu(
+            form,
+            variable=installment_var,
+            values=[str(i) for i in range(1, 25)],
+            fg_color="#101b35",
+            button_color="#233154",
+            button_hover_color="#31446b",
+            height=40,
+            corner_radius=10,
+        ).pack(fill="x")
+
+        ctk.CTkLabel(form, text="Status", text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", pady=(10, 4)
+        )
+        status_var = ctk.StringVar(value="pending")
+        ctk.CTkOptionMenu(
+            form,
+            variable=status_var,
+            values=["pending", "partial", "paid", "overdue"],
+            fg_color="#101b35",
+            button_color="#233154",
+            button_hover_color="#31446b",
+            height=40,
+            corner_radius=10,
+        ).pack(fill="x")
+
         entries = {}
         for label, key, placeholder in [
             ("Amount (BDT) *", "amount", "1500000"),
@@ -417,8 +456,8 @@ class PaymentSchedulesView(ctk.CTkFrame):
                 due_date = entries["due_date"].get().strip()
                 execute_query(
                     "INSERT INTO payment_schedules (investor_id, project_id, installment_no, amount, due_date, status, paid_amount, reminder_sent, notes, created_at, updated_at) "
-                    "VALUES (%s, %s, 1, %s, %s, 'pending', 0, 0, %s, NOW(), NOW())",
-                    (investor_id, project_id, amount, due_date, entries["notes"].get().strip()),
+                    "VALUES (%s, %s, %s, %s, %s, %s, 0, 0, %s, NOW(), NOW())",
+                    (investor_id, project_id, int(installment_var.get()), amount, due_date, status_var.get(), entries["notes"].get().strip()),
                     fetch=False,
                 )
                 dialog.destroy()
@@ -448,10 +487,60 @@ class PaymentSchedulesView(ctk.CTkFrame):
         ).pack(side="right")
 
     def delete_payment(self, payment_id):
-        if not messagebox.askyesno("Delete Payment", "Delete this payment schedule?"):
+        if not messagebox.askyesno("Delete Payment", "Delete this payment schedule? It will be moved to Recycle Bin."):
             return
         try:
-            execute_query("DELETE FROM payment_schedules WHERE id=%s", (payment_id,), fetch=False)
+            recycle_and_delete(
+                "payment_schedules",
+                int(payment_id),
+                deleted_by=self.user.get("id"),
+                reason="Deleted payment schedule",
+            )
             self.load_data()
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
+
+    def open_payment_detail(self, payment):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(payment.get("investor_name") or "Payment Schedule")
+        dialog.geometry("640x620")
+        dialog.configure(fg_color="#0b1327")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text=payment.get("investor_name") or "Payment Schedule", font=ctk.CTkFont(size=24, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=28, pady=(24, 4))
+        ctk.CTkLabel(dialog, text=payment.get("project_name") or "No project", font=ctk.CTkFont(size=12), text_color="#8ea3c7").pack(anchor="w", padx=28)
+
+        body = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(16, 10))
+        info = ctk.CTkFrame(body, fg_color="#101b35", corner_radius=16, border_width=1, border_color="#233154")
+        info.pack(fill="x")
+        for label, value in [
+            ("Amount", f"BDT {as_float(payment.get('amount')):,.0f}"),
+            ("Installment No", str(payment.get("installment_no") or "-")),
+            ("Due Date", format_date(payment.get("due_date"))),
+            ("Paid Date", format_date(payment.get("paid_date"))),
+            ("Status", str(payment.get("status") or "pending").title()),
+            ("Paid Amount", f"BDT {as_float(payment.get('paid_amount')):,.0f}" if payment.get("paid_amount") else "BDT 0"),
+        ]:
+            row = ctk.CTkFrame(info, fg_color="transparent")
+            row.pack(fill="x", padx=16, pady=8)
+            ctk.CTkLabel(row, text=label, width=120, anchor="w", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(side="left")
+            ctk.CTkLabel(row, text=value, font=ctk.CTkFont(size=12), text_color="#f8fafc", wraplength=380, justify="left").pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(body, text="Notes / Comment", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(14, 6))
+        notes_box = ctk.CTkTextbox(body, height=150, fg_color="#101b35", border_color="#233154", border_width=1, corner_radius=12, wrap="word")
+        notes_box.pack(fill="x")
+        notes_box.insert("1.0", str(payment.get("notes") or "No notes saved."))
+        notes_box.configure(state="disabled")
+
+        footer = ctk.CTkFrame(dialog, fg_color="transparent")
+        footer.pack(fill="x", padx=24, pady=(0, 20))
+        ctk.CTkButton(footer, text="Close", fg_color="#182748", hover_color="#223660", corner_radius=10, height=38, command=dialog.destroy).pack(side="left")
+
+    def _bind_click(self, widget, callback):
+        if isinstance(widget, ctk.CTkButton):
+            return
+        widget.bind("<Button-1>", callback)
+        for child in widget.winfo_children():
+            self._bind_click(child, callback)

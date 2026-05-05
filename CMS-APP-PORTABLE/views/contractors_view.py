@@ -10,6 +10,7 @@ import customtkinter as ctk
 
 from core.database import execute_query
 from core.desktop_utils import as_float, format_date, pick_column
+from core.recycle_bin import recycle_and_delete, recycle_and_delete_many
 
 
 class ContractorsView(ctk.CTkFrame):
@@ -282,6 +283,8 @@ class ContractorsView(ctk.CTkFrame):
                 command=lambda item=contractor: self.delete_contractor(item),
             ).pack(side="left", padx=4)
 
+            self._bind_click(row, lambda _event, item=contractor: self.open_contractor_detail(item))
+
     def load_payments(self):
         for widget in self.pay_table.winfo_children():
             widget.destroy()
@@ -293,6 +296,7 @@ class ContractorsView(ctk.CTkFrame):
                        cp.amount,
                        cp.{self.payment_date_col} AS payment_date,
                        cp.description,
+                       cp.notes,
                        cp.invoice_no,
                        cp.status,
                        c.name AS contractor_name,
@@ -356,21 +360,41 @@ class ContractorsView(ctk.CTkFrame):
                 justify="left",
             ).pack(anchor="w")
 
+            self._bind_click(row, lambda _event, item=payment: self.open_payment_detail(item))
+
     def delete_contractor(self, contractor):
         name = contractor.get("name", "this contractor")
         if not messagebox.askyesno(
             "Delete Contractor",
-            f"Delete {name} and every payment linked to this contractor?",
+            f"Delete {name} and every payment linked to this contractor?\n\nThey will be moved to Recycle Bin.",
         ):
             return
 
         try:
-            execute_query("DELETE FROM contractor_payments WHERE contractor_id=%s", (contractor["id"],), fetch=False)
-            execute_query("DELETE FROM contractors WHERE id=%s", (contractor["id"],), fetch=False)
+            contractor_id = int(contractor["id"])
+            try:
+                rows = execute_query("SELECT id FROM contractor_payments WHERE contractor_id=%s", (contractor_id,))
+                ids = [int(r["id"]) for r in (rows or []) if r.get("id") is not None]
+                if ids:
+                    recycle_and_delete_many(
+                        "contractor_payments",
+                        ids,
+                        deleted_by=self.user.get("id"),
+                        reason=f"Deleted with contractor {contractor_id}",
+                    )
+            except Exception:
+                pass
+
+            recycle_and_delete(
+                "contractors",
+                contractor_id,
+                deleted_by=self.user.get("id"),
+                reason="Deleted contractor",
+            )
             execute_query(
                 "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, created_at) "
                 "VALUES (%s, 'delete', 'contractor', %s, %s, NOW())",
-                (self.user.get("id"), contractor["id"], f"Deleted contractor {name} from desktop app"),
+                (self.user.get("id"), contractor_id, f"Deleted contractor {name} from desktop app"),
                 fetch=False,
             )
             self.refresh_stats()
@@ -419,7 +443,8 @@ class ContractorsView(ctk.CTkFrame):
             ctk.CTkLabel(form, text=label, text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
                 anchor="w", pady=(10, 4)
             )
-            current = str(contractor.get(key) or default) if contractor else str(default)
+            current_value = contractor.get(key) if contractor and contractor.get(key) is not None else default
+            current = str(current_value)
             options = list(values)
             if current and current not in options:
                 options = [current] + options
@@ -434,6 +459,37 @@ class ContractorsView(ctk.CTkFrame):
         add_menu("Specialization", "specialization", ["Structural", "Electrical", "Mechanical", "Plumbing", "Interior Finishing", "Landscaping", "General Contractor"], "Structural")
         add_field("Phone", "phone", "01XXXXXXXXX")
         add_field("Email", "email", "contractor@example.com")
+        add_menu("Status", "is_active", ["Active", "Inactive"], "Active" if not contractor or contractor.get("is_active") else "Inactive")
+
+        ctk.CTkLabel(form, text="Address", text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", pady=(10, 4)
+        )
+        address_box = ctk.CTkTextbox(
+            form,
+            height=90,
+            fg_color="#101b35",
+            border_color="#233154",
+            border_width=1,
+            corner_radius=10,
+            wrap="word",
+        )
+        address_box.insert("1.0", str(contractor.get("address") or "") if contractor else "")
+        address_box.pack(fill="x")
+
+        ctk.CTkLabel(form, text="Notes / Comment", text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", pady=(10, 4)
+        )
+        notes_box = ctk.CTkTextbox(
+            form,
+            height=100,
+            fg_color="#101b35",
+            border_color="#233154",
+            border_width=1,
+            corner_radius=10,
+            wrap="word",
+        )
+        notes_box.insert("1.0", str(contractor.get("notes") or "") if contractor else "")
+        notes_box.pack(fill="x")
 
         def save():
             name = entries["name"].get().strip()
@@ -446,19 +502,22 @@ class ContractorsView(ctk.CTkFrame):
                 entries["specialization"].get().strip(),
                 entries["phone"].get().strip(),
                 entries["email"].get().strip(),
+                address_box.get("1.0", "end").strip() or None,
+                notes_box.get("1.0", "end").strip() or None,
+                1 if entries["is_active"].get().strip() == "Active" else 0,
             )
 
             try:
                 if contractor:
                     execute_query(
-                        "UPDATE contractors SET name=%s, company=%s, specialization=%s, phone=%s, email=%s, updated_at=NOW() WHERE id=%s",
+                        "UPDATE contractors SET name=%s, company=%s, specialization=%s, phone=%s, email=%s, address=%s, notes=%s, is_active=%s, updated_at=NOW() WHERE id=%s",
                         values + (contractor["id"],),
                         fetch=False,
                     )
                 else:
                     execute_query(
-                        "INSERT INTO contractors (name, company, specialization, phone, email, is_active, created_at, updated_at) "
-                        "VALUES (%s, %s, %s, %s, %s, 1, NOW(), NOW())",
+                        "INSERT INTO contractors (name, company, specialization, phone, email, address, notes, is_active, created_at, updated_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())",
                         values,
                         fetch=False,
                     )
@@ -560,6 +619,35 @@ class ContractorsView(ctk.CTkFrame):
             entry.pack(fill="x")
             entries[key] = entry
 
+        ctk.CTkLabel(form, text="Payment Status", text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", pady=(10, 4)
+        )
+        status_var = ctk.StringVar(value="paid")
+        ctk.CTkOptionMenu(
+            form,
+            variable=status_var,
+            values=["pending", "approved", "paid", "completed"],
+            fg_color="#101b35",
+            button_color="#233154",
+            button_hover_color="#31446b",
+            height=40,
+            corner_radius=10,
+        ).pack(fill="x")
+
+        ctk.CTkLabel(form, text="Notes / Comment", text_color="#9bb0d5", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", pady=(10, 4)
+        )
+        notes_box = ctk.CTkTextbox(
+            form,
+            height=110,
+            fg_color="#101b35",
+            border_color="#233154",
+            border_width=1,
+            corner_radius=10,
+            wrap="word",
+        )
+        notes_box.pack(fill="x")
+
         def save():
             amount = entries["amount"].get().strip()
             payment_date = entries["date"].get().strip()
@@ -572,8 +660,8 @@ class ContractorsView(ctk.CTkFrame):
 
             try:
                 execute_query(
-                    f"INSERT INTO contractor_payments (contractor_id, project_id, amount, currency, {self.payment_date_col}, invoice_no, description, status, created_by, created_at, updated_at) "
-                    f"VALUES (%s, %s, %s, 'BDT', %s, %s, %s, 'paid', %s, NOW(), NOW())",
+                    f"INSERT INTO contractor_payments (contractor_id, project_id, amount, currency, {self.payment_date_col}, invoice_no, description, status, notes, created_by, created_at, updated_at) "
+                    f"VALUES (%s, %s, %s, 'BDT', %s, %s, %s, %s, %s, %s, NOW(), NOW())",
                     (
                         contractor_id,
                         project_id,
@@ -581,6 +669,8 @@ class ContractorsView(ctk.CTkFrame):
                         payment_date,
                         entries["invoice_no"].get().strip(),
                         entries["description"].get().strip(),
+                        status_var.get().strip() or "paid",
+                        notes_box.get("1.0", "end").strip() or None,
                         self.user.get("id"),
                     ),
                     fetch=False,
@@ -598,6 +688,88 @@ class ContractorsView(ctk.CTkFrame):
                 self.load_payments()
             except Exception as exc:
                 messagebox.showerror("Error", str(exc))
+
+    def open_contractor_detail(self, contractor):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(contractor.get("name") or "Contractor")
+        dialog.geometry("680x720")
+        dialog.configure(fg_color="#0b1327")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text=contractor.get("name") or "Contractor", font=ctk.CTkFont(size=24, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=28, pady=(24, 4))
+        ctk.CTkLabel(dialog, text=contractor.get("specialization") or "General", font=ctk.CTkFont(size=12), text_color="#8ea3c7").pack(anchor="w", padx=28)
+
+        body = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(16, 10))
+        info = ctk.CTkFrame(body, fg_color="#101b35", corner_radius=16, border_width=1, border_color="#233154")
+        info.pack(fill="x")
+        for label, value in [
+            ("Company", contractor.get("company") or "-"),
+            ("Phone", contractor.get("phone") or "-"),
+            ("Email", contractor.get("email") or "-"),
+            ("Status", "Active" if contractor.get("is_active") else "Inactive"),
+            ("Address", contractor.get("address") or "-"),
+        ]:
+            row = ctk.CTkFrame(info, fg_color="transparent")
+            row.pack(fill="x", padx=16, pady=8)
+            ctk.CTkLabel(row, text=label, width=120, anchor="w", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(side="left")
+            ctk.CTkLabel(row, text=value, font=ctk.CTkFont(size=12), text_color="#f8fafc", wraplength=420, justify="left").pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(body, text="Notes / Comment", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(14, 6))
+        notes_box = ctk.CTkTextbox(body, height=150, fg_color="#101b35", border_color="#233154", border_width=1, corner_radius=12, wrap="word")
+        notes_box.pack(fill="x")
+        notes_box.insert("1.0", str(contractor.get("notes") or "No notes saved."))
+        notes_box.configure(state="disabled")
+
+        footer = ctk.CTkFrame(dialog, fg_color="transparent")
+        footer.pack(fill="x", padx=24, pady=(0, 20))
+        ctk.CTkButton(footer, text="Close", fg_color="#182748", hover_color="#223660", corner_radius=10, height=38, command=dialog.destroy).pack(side="left")
+        ctk.CTkButton(footer, text="Edit Contractor", fg_color="#4f8cff", hover_color="#3578f6", corner_radius=10, height=38, command=lambda: [dialog.destroy(), self.open_contractor_dialog(contractor)]).pack(side="right")
+
+    def open_payment_detail(self, payment):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(payment.get("contractor_name") or "Contractor Payment")
+        dialog.geometry("640x620")
+        dialog.configure(fg_color="#0b1327")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text=payment.get("contractor_name") or "Contractor Payment", font=ctk.CTkFont(size=24, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=28, pady=(24, 4))
+        ctk.CTkLabel(dialog, text=f"BDT {as_float(payment.get('amount')):,.0f}", font=ctk.CTkFont(size=16, weight="bold"), text_color="#27d3a2").pack(anchor="w", padx=28)
+
+        body = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(16, 10))
+        info = ctk.CTkFrame(body, fg_color="#101b35", corner_radius=16, border_width=1, border_color="#233154")
+        info.pack(fill="x")
+        for label, value in [
+            ("Project", payment.get("project_name") or "-"),
+            ("Date", format_date(payment.get("payment_date"))),
+            ("Invoice", payment.get("invoice_no") or "-"),
+            ("Status", str(payment.get("status") or "pending").title()),
+            ("Description", payment.get("description") or "-"),
+        ]:
+            row = ctk.CTkFrame(info, fg_color="transparent")
+            row.pack(fill="x", padx=16, pady=8)
+            ctk.CTkLabel(row, text=label, width=120, anchor="w", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(side="left")
+            ctk.CTkLabel(row, text=value, font=ctk.CTkFont(size=12), text_color="#f8fafc", wraplength=380, justify="left").pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(body, text="Notes / Comment", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(14, 6))
+        notes_box = ctk.CTkTextbox(body, height=150, fg_color="#101b35", border_color="#233154", border_width=1, corner_radius=12, wrap="word")
+        notes_box.pack(fill="x")
+        notes_box.insert("1.0", str(payment.get("notes") or "No notes saved."))
+        notes_box.configure(state="disabled")
+
+        footer = ctk.CTkFrame(dialog, fg_color="transparent")
+        footer.pack(fill="x", padx=24, pady=(0, 20))
+        ctk.CTkButton(footer, text="Close", fg_color="#182748", hover_color="#223660", corner_radius=10, height=38, command=dialog.destroy).pack(side="left")
+
+    def _bind_click(self, widget, callback):
+        if isinstance(widget, ctk.CTkButton):
+            return
+        widget.bind("<Button-1>", callback)
+        for child in widget.winfo_children():
+            self._bind_click(child, callback)
 
         footer = ctk.CTkFrame(dialog, fg_color="transparent")
         footer.pack(fill="x", padx=28, pady=(8, 22))

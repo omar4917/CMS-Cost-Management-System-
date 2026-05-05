@@ -10,6 +10,8 @@ import customtkinter as ctk
 
 from core.database import ensure_cash_transactions_table, execute_query
 from core.desktop_utils import as_float, format_date, parse_date
+from core.recycle_bin import recycle_and_delete
+from core.transaction_utils import editable_meta_for_row, transaction_code, transaction_detail_rows, transaction_source_label
 
 
 TYPE_META = {
@@ -236,12 +238,20 @@ class InvestmentsView(ctk.CTkFrame):
             top = ctk.CTkFrame(card, fg_color="transparent")
             top.pack(fill="x", padx=16, pady=(14, 6))
 
+            title_wrap = ctk.CTkFrame(top, fg_color="transparent")
+            title_wrap.pack(side="left", fill="x", expand=True)
             ctk.CTkLabel(
-                top,
+                title_wrap,
+                text=transaction_code(row),
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color="#8aa0c8",
+            ).pack(anchor="w")
+            ctk.CTkLabel(
+                title_wrap,
                 text=row["kind"],
                 font=ctk.CTkFont(size=15, weight="bold"),
                 text_color=self._type_color(row["kind"]),
-            ).pack(side="left")
+            ).pack(anchor="w", pady=(2, 0))
 
             action_wrap = ctk.CTkFrame(top, fg_color="transparent")
             action_wrap.pack(side="right")
@@ -269,6 +279,7 @@ class InvestmentsView(ctk.CTkFrame):
                 f"Date: {format_date(row.get('tx_date'))}",
                 f"Project: {row.get('project_name') or 'Unassigned'}",
                 f"Party: {row.get('party_name') or 'N/A'}",
+                f"Source: {transaction_source_label(row)}",
             ]
             if row.get("reference_no"):
                 meta.append(f"Reference: {row['reference_no']}")
@@ -295,6 +306,8 @@ class InvestmentsView(ctk.CTkFrame):
             else:
                 ctk.CTkFrame(card, fg_color="transparent", height=8).pack()
 
+            self._bind_click(card, lambda _event, item=row: self.open_transaction_detail(item))
+
     def _fetch_rows(self):
         rows = []
 
@@ -312,6 +325,7 @@ class InvestmentsView(ctk.CTkFrame):
             rows.append(
                 {
                     "kind": "Investment",
+                    "entry_type": "investment",
                     "direction": "inflow",
                     "amount": row.get("amount"),
                     "tx_date": row.get("date"),
@@ -321,6 +335,7 @@ class InvestmentsView(ctk.CTkFrame):
                     "payment_method": row.get("payment_method"),
                     "notes": row.get("notes"),
                     "source_table": "investments",
+                    "source_name": "investments",
                     "source_id": row.get("id"),
                 }
             )
@@ -345,6 +360,7 @@ class InvestmentsView(ctk.CTkFrame):
             rows.append(
                 {
                     "kind": self._kind_from_entry(row.get("entry_type")),
+                    "entry_type": row.get("entry_type"),
                     "direction": row.get("direction") or "outflow",
                     "amount": row.get("amount"),
                     "tx_date": row.get("tx_date"),
@@ -354,6 +370,7 @@ class InvestmentsView(ctk.CTkFrame):
                     "payment_method": row.get("payment_method"),
                     "notes": row.get("notes"),
                     "source_table": "cash_transactions",
+                    "source_name": row.get("source_table") or "manual",
                     "source_id": row.get("id"),
                 }
             )
@@ -463,7 +480,7 @@ class InvestmentsView(ctk.CTkFrame):
             ("Amount (BDT)", "amount", ""),
             ("Transaction Date", "tx_date", date.today().isoformat()),
             ("Payment Method", "payment_method", "bank_transfer"),
-            ("Reference", "reference_no", ""),
+            ("Reference / Voucher No", "reference_no", ""),
         ]
         entries = {}
         for label, key, default in field_specs:
@@ -496,7 +513,7 @@ class InvestmentsView(ctk.CTkFrame):
                 entry.pack(fill="x")
                 entries[key] = entry
 
-        ctk.CTkLabel(form, text="Notes", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(
+        ctk.CTkLabel(form, text="Note / Comment", font=ctk.CTkFont(size=12, weight="bold"), text_color="#9bb0d5").pack(
             anchor="w", pady=(12, 4)
         )
         notes_box = ctk.CTkTextbox(
@@ -608,14 +625,24 @@ class InvestmentsView(ctk.CTkFrame):
         ).pack(side="right")
 
     def delete_row(self, row):
-        if not messagebox.askyesno("Confirm", "Delete this transaction record?"):
+        if not messagebox.askyesno("Confirm", "Delete this transaction record? It will be moved to Recycle Bin."):
             return
 
         try:
             if row.get("source_table") == "investments":
-                execute_query("DELETE FROM investments WHERE id = %s", (row.get("source_id"),), fetch=False)
+                recycle_and_delete(
+                    "investments",
+                    int(row.get("source_id")),
+                    deleted_by=self.user.get("id"),
+                    reason="Deleted from Investments view",
+                )
             elif row.get("source_table") == "cash_transactions":
-                execute_query("DELETE FROM cash_transactions WHERE id = %s", (row.get("source_id"),), fetch=False)
+                recycle_and_delete(
+                    "cash_transactions",
+                    int(row.get("source_id")),
+                    deleted_by=self.user.get("id"),
+                    reason="Deleted from Investments view",
+                )
             else:
                 messagebox.showinfo("Not supported", "This transaction is generated from another module.")
                 return
@@ -624,6 +651,160 @@ class InvestmentsView(ctk.CTkFrame):
             return
 
         self.load_data()
+
+    def open_transaction_detail(self, row):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(transaction_code(row))
+        dialog.geometry("640x700")
+        dialog.configure(fg_color="#0f172a")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text=transaction_code(row),
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color="#f8fafc",
+        ).pack(anchor="w", padx=28, pady=(24, 4))
+        ctk.CTkLabel(
+            dialog,
+            text=f"{row.get('kind') or 'Transaction'}  |  {transaction_source_label(row)}",
+            font=ctk.CTkFont(size=12),
+            text_color="#8aa0c8",
+        ).pack(anchor="w", padx=28)
+
+        body = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(16, 10))
+
+        info = ctk.CTkFrame(body, fg_color="#111827", corner_radius=16, border_width=1, border_color="#223356")
+        info.pack(fill="x")
+        for label, value in transaction_detail_rows(row):
+            line = ctk.CTkFrame(info, fg_color="transparent")
+            line.pack(fill="x", padx=16, pady=8)
+            ctk.CTkLabel(
+                line,
+                text=label,
+                width=140,
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color="#9bb0d5",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                line,
+                text=value,
+                font=ctk.CTkFont(size=12),
+                text_color="#f8fafc",
+                wraplength=380,
+                justify="left",
+            ).pack(side="left", fill="x", expand=True)
+
+        edit_meta = editable_meta_for_row(row) or {}
+
+        ctk.CTkLabel(
+            body,
+            text="Reference",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#9bb0d5",
+        ).pack(anchor="w", pady=(16, 4))
+        if edit_meta.get("reference"):
+            reference_entry = ctk.CTkEntry(
+                body,
+                height=40,
+                corner_radius=10,
+                fg_color="#111827",
+                border_color="#223356",
+            )
+            reference_entry.insert(0, str(row.get("reference_no") or ""))
+            reference_entry.pack(fill="x")
+        else:
+            reference_entry = None
+            ctk.CTkLabel(
+                body,
+                text=row.get("reference_no") or "No reference saved",
+                font=ctk.CTkFont(size=12),
+                text_color="#d7e3ff",
+            ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            body,
+            text="Note / Comment",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#9bb0d5",
+        ).pack(anchor="w", pady=(16, 4))
+        notes_box = ctk.CTkTextbox(
+            body,
+            height=180,
+            corner_radius=12,
+            fg_color="#111827",
+            border_color="#223356",
+            border_width=1,
+            wrap="word",
+        )
+        notes_box.insert("1.0", str(row.get("notes") or ""))
+        notes_box.pack(fill="x")
+        if not edit_meta.get("notes"):
+            notes_box.configure(state="disabled")
+
+        footer = ctk.CTkFrame(dialog, fg_color="transparent")
+        footer.pack(fill="x", padx=24, pady=(0, 20))
+        ctk.CTkButton(
+            footer,
+            text="Close",
+            fg_color="#1e293b",
+            hover_color="#334155",
+            height=38,
+            corner_radius=10,
+            command=dialog.destroy,
+        ).pack(side="left")
+
+        if edit_meta:
+            ctk.CTkButton(
+                footer,
+                text="Save Changes",
+                fg_color="#19c37d",
+                hover_color="#14a568",
+                height=38,
+                corner_radius=10,
+                command=lambda: self._save_transaction_meta(row, edit_meta, reference_entry, notes_box, dialog),
+            ).pack(side="right")
+
+    def _save_transaction_meta(self, row, edit_meta, reference_entry, notes_box, dialog):
+        updates = []
+        params = []
+
+        reference_col = edit_meta.get("reference")
+        if reference_col and reference_entry is not None:
+            updates.append(f"{reference_col}=%s")
+            params.append(reference_entry.get().strip() or None)
+
+        notes_col = edit_meta.get("notes")
+        if notes_col:
+            updates.append(f"{notes_col}=%s")
+            params.append(notes_box.get("1.0", "end").strip() or None)
+
+        if not updates:
+            dialog.destroy()
+            return
+
+        try:
+            execute_query(
+                f"UPDATE {row['source_table']} SET {', '.join(updates)}, updated_at=NOW() WHERE id=%s",
+                tuple(params + [row.get("source_id")]),
+                fetch=False,
+            )
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+
+        dialog.destroy()
+        self.load_data()
+
+    def _bind_click(self, widget, callback):
+        if isinstance(widget, ctk.CTkButton):
+            return
+        widget.bind("<Button-1>", callback)
+        for child in widget.winfo_children():
+            self._bind_click(child, callback)
 
     def _kind_from_entry(self, entry_type):
         entry_type = str(entry_type or "").strip().lower()

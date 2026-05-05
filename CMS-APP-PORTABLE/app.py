@@ -20,8 +20,6 @@ env_path = os.path.join(app_dir, ".env")
 if not os.path.exists(env_path):
     with open(env_path, "w", encoding="utf-8") as env_file:
         env_file.write(
-            "DB_TYPE=sqlite\n"
-            "DB_FILE=cms_local.db\n"
             "DB_HOST=127.0.0.1\n"
             "DB_USER=root\n"
             "DB_PASS=\n"
@@ -63,6 +61,7 @@ NAV_SECTIONS = [
             ("emails", "EM", "Email", "Outreach & templates"),
             ("ai", "AI", "Assistant", "AI data operations"),
             ("audit", "AT", "Audit", "Change history"),
+            ("recycle", "RB", "Recycle", "Deleted items"),
             ("datahub", "BK", "Data Hub", "Backups & portability"),
             ("settings", "ST", "Settings", "App configuration"),
         ],
@@ -83,8 +82,9 @@ VIEW_META = {
     "emails": ("Email", "Compose outreach and manage templates."),
     "ai": ("AI Assistant", "Operate the desktop app through guided prompts."),
     "audit": ("Audit Trail", "See who changed what and when."),
+    "recycle": ("Recycle Bin", "Restore or purge deleted records captured by the desktop app."),
     "datahub": ("Data Hub", "Backups, transfers, and portability controls."),
-    "settings": ("Settings", "Tune behavior, branding, and database connections."),
+    "settings": ("Settings", "Tune behavior, branding, user access, and database connections."),
 }
 
 
@@ -345,6 +345,10 @@ class CMSApp(ctk.CTk):
                 from views.audit_view import AuditView
 
                 self.current_view = AuditView(self.content_area, self.current_user)
+            elif view_name == "recycle":
+                from views.recycle_view import RecycleBinView
+
+                self.current_view = RecycleBinView(self.content_area, self.current_user)
             elif view_name == "datahub":
                 from views.datahub_view import DataHubView
 

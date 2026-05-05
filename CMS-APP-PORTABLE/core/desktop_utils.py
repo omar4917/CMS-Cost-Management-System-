@@ -1,17 +1,14 @@
 from datetime import date, datetime
 
-from core.database import DB_TYPE, get_existing_column
-
-
-IS_SQLITE = DB_TYPE == "sqlite"
+from core.database import get_existing_column
 
 
 def sql_now():
-    return "CURRENT_TIMESTAMP" if IS_SQLITE else "NOW()"
+    return "NOW()"
 
 
 def sql_today():
-    return "DATE('now')" if IS_SQLITE else "CURDATE()"
+    return "CURDATE()"
 
 
 def pick_column(table_name, *candidates, fallback=None):
@@ -54,7 +51,7 @@ def parse_date(value):
     return None
 
 
-def format_date(value, fmt="%Y-%m-%d", default="—"):
+def format_date(value, fmt="%Y-%m-%d", default="-"):
     parsed = parse_date(value)
     return parsed.strftime(fmt) if parsed else default
 

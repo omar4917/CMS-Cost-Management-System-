@@ -81,7 +81,11 @@ class ReportsView(ctk.CTkFrame):
 
         try:
             proj = execute_query("SELECT * FROM projects WHERE id=%s", (p_id,))[0]
-            costs = execute_query("SELECT c.name, c.actual_amount, c.date, cat.name as cat_name FROM cost_items c LEFT JOIN cost_categories cat ON c.category_id = cat.id WHERE c.project_id=%s ORDER BY c.date DESC", (p_id,))
+            costs = execute_query(
+                "SELECT cost_detail as name, cost_amount as actual_amount, cost_date as date, cost_head_materials as cat_name "
+                "FROM cost_items WHERE cost_head_project=%s ORDER BY cost_date DESC", 
+                (proj['name'],)
+            )
             
             doc = SimpleDocTemplate(save_path, pagesize=letter)
             styles = getSampleStyleSheet()
