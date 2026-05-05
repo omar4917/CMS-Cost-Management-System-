@@ -96,8 +96,10 @@ class CostManagementView(ctk.CTkFrame):
         self.currency_codes = ["BDT"]
         self.items_by_id = {}
         self.bulk_select_var = ctk.BooleanVar(value=False)
+        self.extra_labels = {}  # {field_key: label} loaded dynamically
         self.build_ui()
         self.load_categories()
+        self._refresh_extra_labels()
         self.load_items()
 
     def build_ui(self):
@@ -257,6 +259,9 @@ class CostManagementView(ctk.CTkFrame):
         self.tree.bind("<Return>", lambda _e: self.open_selected_item())
         self.tree.bind("<Delete>", lambda _e: self.delete_selected_items())
 
+        # Extra dynamic columns will be added in load_items
+        self._extra_column_keys = []
+
         self.table_overlay = ctk.CTkLabel(
             self.table_container,
             text="",
@@ -309,7 +314,70 @@ class CostManagementView(ctk.CTkFrame):
         except Exception:
             return
 
+    def _refresh_extra_labels(self):
+        """Load custom field labels for the current project filter (or all)."""
+        self.extra_labels = {}
+        try:
+            project_filter = self.project_var.get() if hasattr(self, 'project_var') else "All Projects"
+            if project_filter != "All Projects":
+                project_id = next((row.get("id") for row in self.projects if row.get("name") == project_filter), None)
+                if project_id is not None:
+                    rows = execute_query(
+                        "SELECT field_key, label FROM custom_field_labels WHERE project_id=%s ORDER BY sort_order",
+                        (project_id,),
+                    )
+                    self.extra_labels = {r["field_key"]: r["label"] for r in (rows or [])}
+                    return
+            # All Projects — union of all labels
+            rows = execute_query(
+                "SELECT DISTINCT field_key, label FROM custom_field_labels ORDER BY sort_order",
+            )
+            self.extra_labels = {r["field_key"]: r["label"] for r in (rows or [])}
+        except Exception:
+            pass
+
+    def _rebuild_extra_columns(self):
+        """Add/remove extra columns in the treeview based on current extra_labels."""
+        # Remove old extra columns
+        for key in self._extra_column_keys:
+            try:
+                self.tree.heading(key, text="")
+                self.tree.column(key, width=0, stretch=False)
+            except Exception:
+                pass
+
+        # Determine which extras actually have data
+        active_extras = [f"extra_{i}" for i in range(1, 11) if f"extra_{i}" in self.extra_labels]
+        self._extra_column_keys = active_extras
+
+        if not active_extras:
+            # Reset columns to base only
+            base_columns = [key for key, _l, _w, _a in TRACKER_TABLE_COLUMNS]
+            self.tree["columns"] = base_columns
+            for key, label, width, anchor in TRACKER_TABLE_COLUMNS:
+                self.tree.heading(key, text=label, anchor=anchor)
+                self.tree.column(key, width=width, anchor=anchor, stretch=key in {"receive_detail", "cost_detail", "remarks"})
+            return
+
+        # Rebuild columns = base + extras
+        base_columns = [key for key, _l, _w, _a in TRACKER_TABLE_COLUMNS]
+        all_columns = base_columns + active_extras
+        self.tree["columns"] = all_columns
+
+        # Re-apply base headings
+        for key, label, width, anchor in TRACKER_TABLE_COLUMNS:
+            self.tree.heading(key, text=label, anchor=anchor)
+            self.tree.column(key, width=width, anchor=anchor, stretch=key in {"receive_detail", "cost_detail", "remarks"})
+
+        # Apply extra headings
+        for key in active_extras:
+            label = self.extra_labels.get(key, key)
+            self.tree.heading(key, text=label, anchor="w")
+            self.tree.column(key, width=150, anchor="w", stretch=False)
+
     def load_items(self):
+        self._refresh_extra_labels()
+        self._rebuild_extra_columns()
         self._clear_tracker_table()
         self._hide_table_overlay()
 
@@ -435,6 +503,9 @@ class CostManagementView(ctk.CTkFrame):
             }
 
             values = [row_values[key] for key, _label, _w, _a in TRACKER_TABLE_COLUMNS]
+            # Append extra values
+            for ek in self._extra_column_keys:
+                values.append(_text(item.get(ek)))
             self.tree.insert("", "end", iid=str(item["id"]), values=values, tags=("even" if idx % 2 == 0 else "odd",))
 
     def open_item_detail(self, item):
@@ -504,6 +575,14 @@ class CostManagementView(ctk.CTkFrame):
             ("COST HEAD (Project & Office)", _text(head_project) or "-"),
             ("COST HEAD (Months)", _text(item.get("cost_head_months")) or "-"),
         ]
+
+        # Add extra fields if they have data
+        for i in range(1, 11):
+            key = f"extra_{i}"
+            val = _text(item.get(key))
+            if val:
+                label = self.extra_labels.get(key, key)
+                fields.append((label, val))
             
         for label, value in fields:
             row = ctk.CTkFrame(card, fg_color="transparent")
@@ -798,6 +877,20 @@ class CostManagementView(ctk.CTkFrame):
         add_combo("COST HEAD (Months)", "cost_head_months", distinct_values("cost_head_months"), default=(item.get("cost_head_months") if item else ""))
 
         ctk.CTkLabel(form, text="\n--- REMARKS ---", font=ctk.CTkFont(size=14, weight="bold"), text_color="white").pack(anchor="w", pady=(12, 2))
+
+        # --- Dynamic Extra Fields ---
+        extra_entries = {}
+        active_extras = [f"extra_{i}" for i in range(1, 11) if f"extra_{i}" in self.extra_labels]
+        if active_extras or (item and any(item.get(f"extra_{i}") for i in range(1, 11))):
+            ctk.CTkLabel(form, text="\n--- Extra Fields ---", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f59e0b").pack(anchor="w", pady=(12, 2))
+            for i in range(1, 11):
+                key = f"extra_{i}"
+                label = self.extra_labels.get(key)
+                val = item.get(key) if item else None
+                # Show field if it has a label OR if the item already has data for it
+                if label or (val and str(val).strip()):
+                    display_label = label or key
+                    add_entry(display_label, key, placeholder=f"Extra field {i}")
         remarks_box = ctk.CTkTextbox(
             form,
             height=100,
@@ -892,6 +985,12 @@ class CostManagementView(ctk.CTkFrame):
                 _clean_text(combos["cost_head_project"].get()),
                 _clean_text(combos["cost_head_months"].get()),
             )
+
+            # Collect extra field values
+            extra_vals = tuple(
+                _clean_text(entries[f"extra_{i}"].get()) if f"extra_{i}" in entries else None
+                for i in range(1, 11)
+            )
             try:
                 if item:
                     execute_query(
@@ -903,10 +1002,12 @@ class CostManagementView(ctk.CTkFrame):
                             unit=%s, unit_rate=%s, qty=%s, qty_cft=%s, remarks=%s,
                             cost_head_materials=%s, structure_or_finishing=%s, cost_summary_1=%s,
                             category_boq_mapping=%s, cost_head_floors=%s, cost_head_project=%s, cost_head_months=%s,
+                            extra_1=%s, extra_2=%s, extra_3=%s, extra_4=%s, extra_5=%s,
+                            extra_6=%s, extra_7=%s, extra_8=%s, extra_9=%s, extra_10=%s,
                             updated_at=NOW()
                         WHERE id=%s
                         """, 
-                        payload + (item["id"],), 
+                        payload + extra_vals + (item["id"],), 
                         fetch=False
                     )
                 else:
@@ -919,10 +1020,12 @@ class CostManagementView(ctk.CTkFrame):
                             unit, unit_rate, qty, qty_cft, remarks,
                             cost_head_materials, structure_or_finishing, cost_summary_1,
                             category_boq_mapping, cost_head_floors, cost_head_project, cost_head_months,
+                            extra_1, extra_2, extra_3, extra_4, extra_5,
+                            extra_6, extra_7, extra_8, extra_9, extra_10,
                             created_by, created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                         """, 
-                        payload + (self.user.get("id"),), 
+                        payload + extra_vals + (self.user.get("id"),), 
                         fetch=False
                     )
             except Exception as exc:

@@ -209,8 +209,32 @@ def _create_tables(cursor) -> None:
             `cost_head_project` VARCHAR(255) NULL,
             `cost_head_months` VARCHAR(50) NULL,
 
+            `extra_1` TEXT NULL,
+            `extra_2` TEXT NULL,
+            `extra_3` TEXT NULL,
+            `extra_4` TEXT NULL,
+            `extra_5` TEXT NULL,
+            `extra_6` TEXT NULL,
+            `extra_7` TEXT NULL,
+            `extra_8` TEXT NULL,
+            `extra_9` TEXT NULL,
+            `extra_10` TEXT NULL,
+
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS `custom_field_labels` (
+            `id` INTEGER PRIMARY KEY AUTOINCREMENT,
+            `project_id` INT NOT NULL,
+            `field_key` VARCHAR(50) NOT NULL,
+            `label` VARCHAR(255) NOT NULL,
+            `sort_order` INT DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
@@ -517,6 +541,10 @@ def _run_migrations(cursor) -> None:
         ("description", "VARCHAR(300) NULL"),
     ]:
         _ensure_column(cursor, "settings", name, definition)
+
+    # Ensure extra columns exist on cost_items (migration for existing DBs)
+    for i in range(1, 11):
+        _ensure_column(cursor, "cost_items", f"extra_{i}", "TEXT NULL")
 
 
 def init_sqlite_db(conn) -> None:

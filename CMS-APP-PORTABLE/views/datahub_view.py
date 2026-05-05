@@ -219,6 +219,32 @@ class DataHubView(ctk.CTkFrame):
                 "COST HEAD (Materials)", "Structure/Finishing", "Cost Summary 1",
                 "Category BOQ Mapping", "COST HEAD (Floors)", "COST HEAD (Project & Office)", "COST HEAD (Months)"
             ]
+
+            # Look up extra field labels for this project
+            extra_labels = {}  # {field_key: label}
+            if project_id is not None:
+                try:
+                    label_rows = execute_query(
+                        "SELECT field_key, label FROM custom_field_labels WHERE project_id=%s ORDER BY sort_order",
+                        (project_id,),
+                    )
+                    extra_labels = {r["field_key"]: r["label"] for r in (label_rows or [])}
+                except Exception:
+                    pass
+            else:
+                # "All Projects" — collect union of all extra labels
+                try:
+                    label_rows = execute_query(
+                        "SELECT DISTINCT field_key, label FROM custom_field_labels ORDER BY sort_order",
+                    )
+                    extra_labels = {r["field_key"]: r["label"] for r in (label_rows or [])}
+                except Exception:
+                    pass
+
+            # Build ordered list of extra keys that have labels
+            extra_keys = [f"extra_{i}" for i in range(1, 11) if f"extra_{i}" in extra_labels]
+            for ek in extra_keys:
+                headers.append(extra_labels[ek])
             
             # Use openpyxl directly to build the exact template structure
             from openpyxl import Workbook
@@ -252,6 +278,10 @@ class DataHubView(ctk.CTkFrame):
                     item.get("cost_head_materials"), item.get("structure_or_finishing"), item.get("cost_summary_1"),
                     item.get("category_boq_mapping"), item.get("cost_head_floors"), item.get("cost_head_project"), item.get("cost_head_months")
                 ]
+                # Append extra field values
+                for ek in extra_keys:
+                    row_data.append(item.get(ek))
+
                 for c_idx, val in enumerate(row_data, start=1):
                     ws.cell(row=r_idx, column=c_idx, value=val)
                 # Auto-calculate Cost AMOUNT if Unit Rate and Qty exist
@@ -504,6 +534,32 @@ class DataHubView(ctk.CTkFrame):
                         text = text.split(" ", 1)[0]
                     return text
 
+                # --- Detect extra columns beyond the standard template ---
+                KNOWN_COLUMNS = {
+                    "Receive DATE", "Receive DETAIL", "Receive AMOUNT", "RECEIVED FROM",
+                    "Cost DATE", "Cost DETAIL", "Cost AMOUNT", "PAY TO",
+                    "Unit", "Unit Rate", "Qty", "Qty (CFT)", "REMARKS",
+                    "COST HEAD (Materials)", "Structure/Finishing", "Cost Summary 1",
+                    "Category BOQ Mapping", "COST HEAD (Floors)", "COST HEAD (Project & Office)", "COST HEAD (Months)",
+                }
+                extra_excel_cols = [c for c in df.columns if c not in KNOWN_COLUMNS and not str(c).startswith("Unnamed")]
+                extra_excel_cols = extra_excel_cols[:10]  # Cap at 10 extra fields
+
+                # Save extra column labels for this project
+                if extra_excel_cols and project_id is not None:
+                    # Clear existing labels for this project first
+                    execute_query(
+                        "DELETE FROM custom_field_labels WHERE project_id=%s",
+                        (project_id,),
+                        fetch=False,
+                    )
+                    for idx, col_name in enumerate(extra_excel_cols):
+                        execute_query(
+                            "INSERT INTO custom_field_labels (project_id, field_key, label, sort_order) VALUES (%s, %s, %s, %s)",
+                            (project_id, f"extra_{idx + 1}", str(col_name), idx),
+                            fetch=False,
+                        )
+
                 rows = []
                 for _, row in df.iterrows():
                     cost_detail = _to_text(row.get("Cost DETAIL"))
@@ -518,6 +574,14 @@ class DataHubView(ctk.CTkFrame):
                     cost_amount = _to_float(row.get("Cost AMOUNT"))
                     if cost_amount == 0 and unit_rate > 0 and qty > 0:
                         cost_amount = unit_rate * qty
+
+                    # Build extra values (always 10 slots)
+                    extra_values = []
+                    for idx in range(10):
+                        if idx < len(extra_excel_cols):
+                            extra_values.append(_to_text(row.get(extra_excel_cols[idx])))
+                        else:
+                            extra_values.append(None)
 
                     payload = (
                         project_id,
@@ -541,6 +605,7 @@ class DataHubView(ctk.CTkFrame):
                         _to_text(row.get("COST HEAD (Floors)")),
                         _to_text(row.get("COST HEAD (Project & Office)")),
                         _to_text(row.get("COST HEAD (Months)")),
+                        *extra_values,
                         self.user.get("id"),
                     )
                     rows.append(payload)
@@ -555,18 +620,21 @@ class DataHubView(ctk.CTkFrame):
                             unit, unit_rate, qty, qty_cft, remarks,
                             cost_head_materials, structure_or_finishing, cost_summary_1,
                             category_boq_mapping, cost_head_floors, cost_head_project, cost_head_months,
+                            extra_1, extra_2, extra_3, extra_4, extra_5,
+                            extra_6, extra_7, extra_8, extra_9, extra_10,
                             created_by
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         rows,
                     )
                 else:
                     count = 0
 
+                extra_msg = f" (+{len(extra_excel_cols)} extra fields)" if extra_excel_cols else ""
                 self.after(
                     0,
                     lambda: self.import_status.configure(
-                        text=f"Import complete. Added {count} cost items.",
+                        text=f"Import complete. Added {count} cost items.{extra_msg}",
                         text_color="#10b981",
                     ),
                 )
@@ -577,7 +645,7 @@ class DataHubView(ctk.CTkFrame):
                         self.user.get("id"),
                         "IMPORT",
                         "cost_tracker",
-                        f"Imported {count} cost tracker rows from Excel (project={project_name or 'NONE'})",
+                        f"Imported {count} cost tracker rows from Excel (project={project_name or 'NONE'}, extras={len(extra_excel_cols)})",
                     ),
                     fetch=False,
                 )
