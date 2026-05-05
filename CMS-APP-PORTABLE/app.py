@@ -63,6 +63,7 @@ NAV_SECTIONS = [
             ("audit", "AT", "Audit", "Change history"),
             ("recycle", "RB", "Recycle", "Deleted items"),
             ("datahub", "BK", "Data Hub", "Backups & portability"),
+            ("excel_editor", "XL", "XL Editor", "View & edit spreadsheets"),
             ("settings", "ST", "Settings", "App configuration"),
         ],
     ),
@@ -84,6 +85,7 @@ VIEW_META = {
     "audit": ("Audit Trail", "See who changed what and when."),
     "recycle": ("Recycle Bin", "Restore or purge deleted records captured by the desktop app."),
     "datahub": ("Data Hub", "Backups, transfers, and portability controls."),
+    "excel_editor": ("XL Editor", "View and edit Excel cost trackers directly."),
     "settings": ("Settings", "Tune behavior, branding, user access, and database connections."),
 }
 
@@ -352,6 +354,10 @@ class CMSApp(ctk.CTk):
                 from views.datahub_view import DataHubView
 
                 self.current_view = DataHubView(self.content_area, self.current_user)
+            elif view_name == "excel_editor":
+                from views.excel_editor_view import ExcelEditorView
+
+                self.current_view = ExcelEditorView(self.content_area, self.current_user)
             elif view_name == "settings":
                 from views.settings_view import SettingsView
 

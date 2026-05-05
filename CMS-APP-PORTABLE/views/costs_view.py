@@ -1079,24 +1079,43 @@ class CostManagementView(ctk.CTkFrame):
             messagebox.showerror("Error", str(exc))
 
     def show_cost_heads(self):
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Cost Heads (From Cost Tracker)")
-        dialog.geometry("780x650")
-        dialog.configure(fg_color="#0f172a")
-        dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
 
-        ctk.CTkLabel(dialog, text="Cost Heads", font=ctk.CTkFont(size=20, weight="bold"), text_color="white").pack(pady=(20, 4))
+        self.cost_heads_search_var = ctk.StringVar()
+        self.cost_heads_search_var.trace_add("write", lambda *args: self._update_cost_heads_ui(scroll_container))
+
+        top_bar = ctk.CTkFrame(dialog, fg_color="transparent")
+        top_bar.pack(fill="x", padx=20, pady=(20, 10))
+
+        ctk.CTkLabel(top_bar, text="Cost Heads", font=ctk.CTkFont(size=20, weight="bold"), text_color="white").pack(side="left")
+        
+        search_frame = ctk.CTkFrame(top_bar, fg_color="#1e293b", height=36, corner_radius=8)
+        search_frame.pack(side="right", fill="x", expand=True, padx=(20, 0))
+        
+        ctk.CTkLabel(search_frame, text="🔍", font=ctk.CTkFont(size=14)).pack(side="left", padx=10)
+        self.ch_search_entry = ctk.CTkEntry(search_frame, placeholder_text="Search cost heads...", 
+                                           textvariable=self.cost_heads_search_var,
+                                           fg_color="transparent", border_width=0, height=30)
+        self.ch_search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
         ctk.CTkLabel(
             dialog,
-            text="These are pulled from the imported Cost Tracker columns (distinct values + counts).",
+            text="Click a cost head to view detailed transactions and materials.",
             font=ctk.CTkFont(size=12),
             text_color="#94a3b8",
-        ).pack(pady=(0, 14))
+        ).pack(anchor="w", padx=22, pady=(0, 10))
 
-        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
-        scroll.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        scroll_container = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        scroll_container.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        
+        self._update_cost_heads_ui(scroll_container)
 
+    def _update_cost_heads_ui(self, container):
+        for w in container.winfo_children():
+            w.destroy()
+
+        search_term = self.cost_heads_search_var.get().lower()
+        
         columns = [
             ("COST HEAD (Materials)", "cost_head_materials"),
             ("Structure/Finishing", "structure_or_finishing"),
@@ -1108,10 +1127,6 @@ class CostManagementView(ctk.CTkFrame):
         ]
 
         for title, col in columns:
-            card = ctk.CTkFrame(scroll, fg_color="#111827", corner_radius=12, border_width=1, border_color="#223356")
-            card.pack(fill="x", pady=8)
-            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=14, weight="bold"), text_color="white").pack(anchor="w", padx=14, pady=(12, 6))
-
             try:
                 rows = execute_query(
                     f"SELECT {col} AS value, COUNT(*) AS cnt "
@@ -1120,31 +1135,112 @@ class CostManagementView(ctk.CTkFrame):
                     f"GROUP BY {col} "
                     f"ORDER BY cnt DESC, value ASC"
                 )
-            except Exception as exc:
-                ctk.CTkLabel(card, text=f"Error: {exc}", text_color="#ef4444").pack(anchor="w", padx=14, pady=(0, 12))
+            except Exception:
                 continue
 
-            lines = []
-            for row in rows or []:
-                value = row.get("value")
-                if value is None:
-                    continue
-                lines.append(f"{value} ({row.get('cnt')})")
-            if not lines:
-                lines = ["(No values found)"]
+            # Filter rows based on search
+            filtered_rows = [r for r in (rows or []) if search_term in str(r['value']).lower()]
+            if not filtered_rows and search_term:
+                continue
 
-            box = ctk.CTkTextbox(
-                card,
-                height=120,
-                fg_color="#0f172a",
-                border_color="#223356",
-                border_width=1,
-                corner_radius=10,
-                wrap="none",
+            card = ctk.CTkFrame(container, fg_color="#111827", corner_radius=12, border_width=1, border_color="#223356")
+            card.pack(fill="x", pady=8)
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=14, weight="bold"), text_color="#3b82f6").pack(anchor="w", padx=14, pady=(12, 6))
+
+            list_frame = ctk.CTkFrame(card, fg_color="#0f172a", corner_radius=10)
+            list_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+            if not filtered_rows:
+                ctk.CTkLabel(list_frame, text="(No matching values)", text_color="#475569").pack(pady=10)
+                continue
+
+            for row in filtered_rows:
+                val = row['value']
+                cnt = row['cnt']
+                
+                btn = ctk.CTkButton(
+                    list_frame, 
+                    text=f"{val} ({cnt})",
+                    font=ctk.CTkFont(size=12),
+                    fg_color="transparent",
+                    hover_color="#1e293b",
+                    anchor="w",
+                    height=30,
+                    text_color="#cbd5e1",
+                    command=lambda c=col, v=val: self._show_filtered_costs(c, v)
+                )
+                btn.pack(fill="x", padx=5, pady=1)
+
+    def _show_filtered_costs(self, column, value):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(f"Transactions: {value}")
+        dialog.geometry("900x600")
+        dialog.configure(fg_color="#0f172a")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text=f"Cost Transactions for '{value}'", font=ctk.CTkFont(size=18, weight="bold"), text_color="white").pack(pady=20)
+        
+        from tkinter import ttk
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Filtered.Treeview", background="#111827", foreground="white", fieldbackground="#111827", borderwidth=0, rowheight=30)
+        style.map("Filtered.Treeview", background=[('selected', '#3b82f6')])
+        
+        table_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        table_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        cols = ("id", "date", "detail", "amount", "pay_to", "invoice")
+        tree = ttk.Treeview(table_frame, columns=cols, show="headings", style="Filtered.Treeview")
+        
+        tree.heading("id", text="Trx #")
+        tree.heading("date", text="Date")
+        tree.heading("detail", text="Detail")
+        tree.heading("amount", text="Amount")
+        tree.heading("pay_to", text="Pay To")
+        tree.heading("invoice", text="Invoice")
+        
+        tree.column("id", width=60)
+        tree.column("date", width=100)
+        tree.column("detail", width=300)
+        tree.column("amount", width=100, anchor="e")
+        tree.column("pay_to", width=150)
+        tree.column("invoice", width=100)
+        
+        scrollbar = ctk.CTkScrollbar(table_frame, orientation="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        try:
+            items = execute_query(
+                f"SELECT id, cost_date, cost_detail, cost_amount, pay_to, invoice_no "
+                f"FROM cost_items WHERE {column} = %s ORDER BY cost_date DESC",
+                (value,)
             )
-            box.pack(fill="x", padx=14, pady=(0, 12))
-            box.insert("1.0", "\n".join(lines[:250]))
-            box.configure(state="disabled")
+            for it in items:
+                tree.insert("", "end", values=(
+                    it['id'], 
+                    it['cost_date'] or '-', 
+                    it['cost_detail'] or '-', 
+                    f"{float(it['cost_amount'] or 0):,.2f}", 
+                    it['pay_to'] or '-',
+                    it['invoice_no'] or '-'
+                ))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load transactions: {e}")
+
+        def open_item():
+            sel = tree.selection()
+            if not sel: return
+            item_id = tree.item(sel[0])['values'][0]
+            # Find item in database
+            it = execute_query("SELECT * FROM cost_items WHERE id=%s", (item_id,))[0]
+            self.open_item_detail(it)
+
+        ctk.CTkButton(dialog, text="View Detailed Info", command=open_item, fg_color="#3b82f6").pack(pady=10)
+
 
     def show_categories(self):
         dialog = ctk.CTkToplevel(self)
